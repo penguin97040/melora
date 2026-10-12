@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Player } from './components/Player';
+import brandIcon from '../src-tauri/icons/source.svg';
 import {
   defaultPreferences,
   getAppInfo,
@@ -88,11 +89,9 @@ export default function App() {
       </a>
       <header className="masthead">
         <div className="brand">
-          <span className="brand-symbol">m.</span>
+          <img className="brand-symbol" src={brandIcon} alt="" />
           <span>melora</span>
         </div>
-        <span className="preview-badge">Synthetic preview</span>
-        <span className="header-note">A quieter place for your music</span>
       </header>
       <div className="workspace">
         <aside className="sidebar panel">
@@ -318,8 +317,9 @@ export default function App() {
       <footer className="status-strip">
         <span>
           <span className="status-dot" />
-          Preview · no audio
+          Synthetic preview
         </span>
+        <span className="stream-quality">Stream quality: unavailable</span>
         <span role="status">
           {info
             ? `v${info.version} / ${info.platform}`

@@ -28,6 +28,7 @@ describe('preview shell', () => {
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next track' })).toBeDisabled();
     expect(screen.getByText('Synthetic preview')).toBeInTheDocument();
+    expect(screen.getByText('Stream quality: unavailable')).toBeInTheDocument();
   });
 
   it('supports keyboard selection and playlist filtering', async () => {
