@@ -1,4 +1,5 @@
 mod preferences;
+mod window_layout;
 
 use preferences::{Preferences, Store};
 use serde::Serialize;
@@ -57,6 +58,9 @@ pub fn run() {
     let result = tauri::Builder::default()
         .setup(|app| {
             app.manage(Mutex::new(Store::open(settings_directory(app)?)));
+            if let Some(window) = app.get_webview_window("main") {
+                window_layout::initialise(&window)?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![app_info, save_preferences])

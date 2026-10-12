@@ -2,7 +2,7 @@
 
 Melora is a personal desktop music client built with Tauri 2, Rust, React and TypeScript. Windows, Linux and macOS are intended targets.
 
-The first build is a local design preview with invented track titles, artists and artwork. You can browse preview playlists, search, select tracks and adjust display preferences. Spotify sign-in and playback are not implemented yet. Melora is unofficial and is not affiliated with Spotify.
+The first build is a local design preview with invented track titles, artists and artwork. You can browse preview playlists, search, select tracks and adjust display preferences. Shuffle and repeat let you preview mode selections; they leave track order unchanged and reset on relaunch. Spotify sign-in and playback are not implemented yet. Melora is unofficial and is not affiliated with Spotify.
 
 ## Run the preview
 

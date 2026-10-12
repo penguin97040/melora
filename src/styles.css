@@ -17,10 +17,12 @@
 :root {
   color-scheme: dark;
   --background: #080e0b;
-  --surface: #0d1712;
-  --surface-raised: #14231c;
-  --cyan: #42edff;
-  --text: #d9eee5;
+  --surface: #122a1e;
+  --surface-raised: #20412f;
+  --control: #19373c;
+  --active-mode: #78ffad;
+  --cyan: #67f7ff;
+  --text: #c0e2ce;
   --muted: #a6beb3;
   --orange: #ffa451;
   --selection: #402b18;
@@ -31,6 +33,7 @@
   font-family: var(--font-technical);
   background: var(--background);
   color: var(--text);
+  letter-spacing: 0.02em;
 }
 * {
   box-sizing: border-box;
@@ -159,7 +162,7 @@ p {
 }
 .nav-item.active {
   color: var(--cyan);
-  background: var(--surface-raised);
+  background: var(--control);
   border-left-color: var(--cyan);
 }
 .nav-index {
@@ -274,12 +277,14 @@ p {
   font-family: var(--font-track);
   text-align: left;
   font-size: 1rem;
+  letter-spacing: 0.025em;
 }
 .track-table thead {
   font-family: var(--font-technical);
   font-size: 0.75rem;
   color: var(--muted);
   text-transform: uppercase;
+  letter-spacing: normal;
 }
 .track-table th {
   padding: 0.6rem 0.75rem;
@@ -347,18 +352,21 @@ p {
 .player {
   border-left: 1px solid var(--border);
   background: var(--background);
+  container-type: size;
 }
 .player-body {
+  --player-gap: clamp(0.65rem, 1.7cqh, 1rem);
   padding: 1rem;
   position: sticky;
   top: 0;
 }
 .cover {
+  width: min(100%, clamp(8rem, calc(100cqh - 34rem), 18rem));
   aspect-ratio: 1;
   position: relative;
   overflow: hidden;
   border: 1px solid var(--orange);
-  margin-bottom: 1.6rem;
+  margin: 0 auto var(--player-gap);
   background:
     repeating-linear-gradient(
       0deg,
@@ -409,12 +417,13 @@ p {
   font-size: 1.35rem;
   line-height: 1.3;
   overflow-wrap: anywhere;
+  letter-spacing: 0.025em;
 }
 .artist-name {
   color: var(--cyan);
   text-transform: uppercase;
   font-size: 0.9375rem;
-  margin-top: 0.85rem;
+  margin-top: var(--player-gap);
 }
 .muted {
   color: var(--muted);
@@ -426,7 +435,7 @@ p {
   align-items: center;
   font-size: 0.75rem;
   color: var(--muted);
-  margin-block: 1.5rem 1rem;
+  margin-block: var(--player-gap);
   line-height: 1.5;
 }
 input[type='range'] {
@@ -441,23 +450,46 @@ input[type='range'] {
   margin-top: 0.4rem;
 }
 .transport {
-  display: flex;
-  justify-content: center;
-  gap: 1.1rem;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.125rem;
   align-items: center;
-  padding-block: 1.2rem;
+  padding-block: var(--player-gap);
 }
 .transport button {
+  position: relative;
+  display: grid;
+  place-items: center;
   font-size: 1.1rem;
   color: var(--cyan);
-  min-width: 2.5rem;
+  min-width: 0;
   min-height: 2.5rem;
+  background: var(--control);
+  scroll-margin-block: 0.5rem;
+}
+.transport button.mode-active {
+  color: var(--active-mode);
+  border-bottom: 2px solid currentColor;
+}
+.transport button:focus-visible {
+  outline-offset: 1px;
+}
+.repeat-one {
+  position: absolute;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+.mode-status {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  margin-bottom: var(--player-gap);
 }
 .transport .play-button {
   border: 1px solid var(--border);
 }
 .device {
-  padding-top: 1.1rem;
+  padding-top: var(--player-gap);
   border-top: 1px solid var(--border);
   font-size: 0.8125rem;
 }
@@ -468,7 +500,7 @@ input[type='range'] {
   color: var(--muted);
   font-size: 0.75rem;
   line-height: 1.6;
-  margin-top: 1.5rem;
+  margin-top: var(--player-gap);
 }
 .status-strip {
   display: flex;
@@ -612,12 +644,13 @@ select {
   .player {
     border-left: 0;
     border-top: 1px solid var(--border);
+    container-type: normal;
   }
   .player-body {
     position: static;
   }
   .cover {
-    max-width: 15rem;
+    width: min(100%, 15rem);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -654,6 +687,7 @@ select {
 .content,
 .player {
   overflow-y: auto;
+  scroll-padding-block: 0.5rem;
 }
 .player-body {
   position: static;
@@ -662,6 +696,13 @@ select {
   width: 1.1rem;
   height: 1.1rem;
   fill: currentColor;
+}
+.transport .mode-icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 @container shell (max-width: 53.125rem) {
   .workspace {
@@ -675,11 +716,20 @@ select {
 @container shell (max-width: 35rem) {
   .workspace {
     overflow-y: auto;
+    scroll-padding-block: 0.5rem;
   }
   .sidebar,
   .content,
   .player {
     flex-shrink: 0;
     overflow: visible;
+  }
+}
+@media (max-height: 740px) {
+  @container shell (35rem < width <= 53.125rem) {
+    .sidebar {
+      max-height: 30dvh;
+      overflow-y: auto;
+    }
   }
 }

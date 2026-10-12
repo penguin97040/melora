@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import App from './App';
@@ -53,6 +53,91 @@ describe('preview shell', () => {
     expect(
       screen.getByRole('heading', { name: 'Amber lines' }),
     ).toBeInTheDocument();
+  });
+
+  it('cycles preview modes by keyboard and retains them across tracks and navigation', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+    await screen.findByText('v0.1.0 / windows');
+    const controls = screen.getByRole('group', {
+      name: 'Preview player controls',
+    });
+    expect(
+      within(controls)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label')),
+    ).toEqual([
+      'Shuffle: Off (preview)',
+      'Previous track',
+      'Play',
+      'Next track',
+      'Repeat: Off (preview)',
+    ]);
+    const shuffle = screen.getByRole('button', {
+      name: 'Shuffle: Off (preview)',
+    });
+    expect(shuffle).toHaveAccessibleDescription(
+      /track order and audio are unchanged/i,
+    );
+    shuffle.focus();
+    await user.keyboard(' ');
+    expect(shuffle).toHaveAccessibleName('Shuffle: On (preview)');
+    expect(shuffle).toHaveAttribute('aria-pressed', 'true');
+    await user.keyboard('{Tab}');
+    const repeat = screen.getByRole('button', {
+      name: 'Repeat: Off (preview)',
+    });
+    expect(repeat).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(repeat).toHaveAccessibleName('Repeat: All (preview)');
+    expect(repeat).toHaveAttribute('aria-pressed', 'true');
+    await user.keyboard(' ');
+    expect(repeat).toHaveAccessibleName('Repeat: Song (preview)');
+    expect(within(repeat).getByText('1')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Amber lines.*Static Gardens/ }),
+    );
+    await user.click(screen.getByRole('button', { name: /Search/ }));
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.click(
+      screen.getByRole('button', { name: /Soft machinery.*Static Gardens/ }),
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Amber lines' }),
+    ).toBeInTheDocument();
+    expect(shuffle).toHaveAccessibleName('Shuffle: On (preview)');
+    expect(repeat).toHaveAccessibleName('Repeat: Song (preview)');
+    expect(
+      screen
+        .getAllByRole('button', { name: /Static Gardens/ })
+        .slice(1)
+        .map((button) => button.textContent),
+    ).toEqual([
+      'Night geometryStatic Gardens',
+      'Amber linesStatic Gardens',
+      'Small hoursStatic Gardens',
+      'Paper satellitesStatic Gardens',
+    ]);
+    await user.click(repeat);
+    expect(repeat).toHaveAccessibleName('Repeat: Off (preview)');
+    expect(repeat).toHaveAttribute('aria-pressed', 'false');
+    expect(within(repeat).queryByText('1')).not.toBeInTheDocument();
+    await user.click(shuffle);
+    expect(shuffle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(shuffle);
+    await user.click(repeat);
+    expect(savePreferences).not.toHaveBeenCalled();
+    unmount();
+    render(<App />);
+    expect(
+      screen.getByRole('button', { name: 'Shuffle: Off (preview)' }),
+    ).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.getByRole('button', { name: 'Repeat: Off (preview)' }),
+    ).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('searches synthetic data and announces an empty result', async () => {

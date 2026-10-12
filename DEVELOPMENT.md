@@ -33,6 +33,8 @@ cargo check --manifest-path src-tauri/Cargo.toml --locked
 
 For automated native Linux acceptance, install `webkitgtk-webdriver` and Xvfb, build the native debug executable and run `python3 scripts/test-native.py /absolute/path/to/melora`. The checks use disposable application data and save local screenshots in `artifacts/runtime`.
 
+To check opening bounds on a smaller simulated monitor, add `--opening-only --screen 1280x720`. Add `--device-scale 2` to simulate GTK scaling. These checks run without a window manager; decoration subtraction is covered by Rust tests. Actual OS DPI and decorated-window behaviour need testing on each desktop OS.
+
 The asset audit rejects private inputs and source maps in `dist` and unexpected native resources. Publication checks use a local pre-push hook and local destination/identity approval; run `npm run gate` explicitly before each push. The gate scans complete ancestry of outgoing commits, their trees and metadata, the index and publishable working files. It is deliberately conservative: unusual binaries, symlinks, submodules, unapproved identities or incomplete history block publication. Pattern checks require human review for unrecognised secrets and personal information.
 
 ## Windows portable build
@@ -59,7 +61,7 @@ If Microsoft's SDK download is blocked, report the exact required hostname and w
 
 - Windows: extract to a writable folder; launch without installation; confirm native title controls, displayed version/platform and synthetic preview. Change settings, close and relaunch; inspect neighbouring `data/preferences.json`. Also test an unwritable folder and missing WebView2.
 - Linux/macOS: confirm the same shell and IPC, then preference persistence in the platform app-data directory. macOS builds require a Mac.
-- Keyboard: tab through navigation, playlists, track titles and settings; select with Enter; verify visible focus and the skip link.
-- Layout: test narrow and wide windows, 125–200% scale and reduced motion; content should reflow and remain reachable.
+- Keyboard: tab through navigation, playlists, track titles, shuffle, repeat and settings; select with Enter or Space; verify visible focus and the skip link. Shuffle toggles and repeat cycles Off → All → Song → Off, retaining selections across navigation and resetting on relaunch.
+- Layout: opening size prefers 1360 × 940 logical pixels, bounded by the current monitor's work area after native decorations. At 100% interface scale the full player fits at that preferred size. Test shorter windows, 125–200% scale and reduced motion; scroll to all controls and verify focus stays visible.
 
 This milestone contains no Spotify authentication or audio. Embedded playback is supported only after audible playback has been independently verified on each OS. Linux AppImage and macOS application bundle delivery follow in later milestones.
