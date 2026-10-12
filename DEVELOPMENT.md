@@ -61,10 +61,21 @@ If Microsoft's SDK download is blocked, report the exact required hostname and w
 
 ## Runtime acceptance
 
-- Windows: extract to a writable folder; launch without installation; confirm native title controls, displayed version/platform and synthetic preview. Change settings, close and relaunch; inspect neighbouring `data/preferences.json`. Also test an unwritable folder and missing WebView2.
+- Windows: extract to a writable folder; launch without installation; confirm integrated title controls, displayed version/platform and synthetic preview. Change settings, close and relaunch; inspect neighbouring `data/preferences.json`. Also test an unwritable folder and missing WebView2.
 - Linux/macOS: confirm the same shell and IPC, then preference persistence in the platform app-data directory. macOS builds require a Mac.
 - Keyboard: tab through navigation, playlists, track titles, shuffle, repeat and settings; select with Enter or Space; verify visible focus and the skip link. Shuffle toggles and repeat cycles Off → All → Song → Off, retaining selections across navigation and resetting on relaunch.
 - Startup: the native window starts hidden. After local preference loading settles and the shell commits, `show_main_window` finishes sizing/centring and reveals it once. Failed preference loading still reveals the shell with an error. Confirm repeated launches reveal a centred shell without a visible move, and that resizing remains unchanged after duplicate readiness calls.
-- Layout: opening size prefers 1440 × 820 logical pixels, bounded by the current monitor's work area after native decorations. At 100% interface scale the full player fits at that preferred size. Test shorter windows, 125–200% scale and reduced motion; scroll to all controls and verify focus stays visible.
+- Layout: opening size prefers 1440 × 940 logical pixels, bounded by the current monitor's work area after native decorations. At 100% interface scale the full player fits at that preferred size. Test shorter windows, 125–200% scale and reduced motion; scroll to all controls and verify focus stays visible.
 
 This milestone contains no Spotify authentication or audio. Embedded playback is supported only after audible playback has been independently verified on each OS. Linux AppImage and macOS application bundle delivery follow in later milestones.
+
+The header shares the window title area. Windows/Linux use a resizable undecorated
+window; macOS overlays the decorated title bar with native traffic lights and a
+hidden native title. Browser previews disable window controls. Test header dragging,
+double-click behaviour, minimise/maximise/restore/close, snapping and all eight resize
+edges/corners. Native resize events must update the maximise icon and disable resize
+targets while maximised. Confirm keyboard focus and restored display preferences.
+Run `python3 scripts/test-native.py /path/to/melora --chrome-only` to exercise
+controls, dragging/double-clicking and all resize edges under Openbox/Xvfb.
+Actual desktop checks are required on Windows, macOS, Linux X11 and Wayland;
+headless WebKit acceptance and cross compilation do not establish those behaviours.

@@ -23,6 +23,7 @@ parser.add_argument('executable')
 parser.add_argument('--screen', default='1920x1080')
 parser.add_argument('--device-scale', type=int, choices=[1, 2], default=1)
 parser.add_argument('--opening-only', action='store_true')
+parser.add_argument('--chrome-only', action='store_true', help='Exercise native window controls under Openbox/Xvfb')
 args = parser.parse_args()
 if not re.fullmatch(r'[1-9][0-9]*x[1-9][0-9]*', args.screen):
     parser.error('Screen must be WIDTHxHEIGHT in physical pixels')
@@ -38,8 +39,8 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                                f'GDK_SCALE={args.device_scale}',
                                'WEBKIT_DISABLE_COMPOSITING_MODE=1', 'XDG_DATA_HOME=' + data,
                                'python3', '-c',
-                               "import os,sys,json;from pathlib import Path;Path(sys.argv[1]).write_text(json.dumps({key:os.environ[key] for key in ['DISPLAY','XAUTHORITY']}));os.execvp('WebKitWebDriver',['WebKitWebDriver','--port='+sys.argv[2]])",
-                               str(Path(data) / 'display'), str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                               "import os,sys,json,subprocess;from pathlib import Path;Path(sys.argv[1]).write_text(json.dumps({key:os.environ[key] for key in ['DISPLAY','XAUTHORITY']}));subprocess.Popen(['openbox'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) if sys.argv[3]=='chrome' else None;os.execvp('WebKitWebDriver',['WebKitWebDriver','--port='+sys.argv[2]])",
+                               str(Path(data) / 'display'), str(port), 'chrome' if args.chrome_only else 'plain'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     base = f'http://127.0.0.1:{port}'
     session = None
     try:
@@ -75,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 if execute(script):
                     return
                 time.sleep(0.1)
-            raise AssertionError('Native UI assertion timed out')
+            raise AssertionError('Native UI assertion timed out: ' + str(execute("return {errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent), clicks:window.__chromeClicks};")))
         wait_script("return document.body.innerText.includes('v0.1.0 / linux');")
         opening_size = execute('return {width: innerWidth, height: innerHeight};')
         opening_rect = call('GET', '/window/rect')
@@ -83,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         if args.opening_only:
             assert opening_size == {
                 'width': min(1440, screen_width // args.device_scale),
-                'height': min(820, screen_height // args.device_scale),
+                'height': min(940, screen_height // args.device_scale),
             }, f'Opening size not bounded to simulated monitor: {opening_size}'
             rect = call('GET', '/window/rect')
             assert rect['x'] >= 0 and rect['y'] >= 0, 'Opening position outside monitor'
@@ -96,9 +97,23 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             (output / f'opening-{args.screen}-{args.device_scale}.json').write_text(json.dumps(evidence, indent=2) + '\n')
             print(f'Native opening bounds passed: {args.screen} physical pixels, simulated GTK scale {args.device_scale}.')
             sys.exit(0)
-        assert opening_size == {'width': 1440, 'height': 820}, 'Preferred opening client size not applied'
+        assert opening_size == {'width': 1440, 'height': 940}, 'Preferred opening client size not applied'
         assert execute("return document.querySelector('.player').scrollHeight <= document.querySelector('.player').clientHeight + 1;"), 'Preferred player requires scrolling'
         (output / 'melora-linux-preferred.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+        def artwork_geometry():
+            return execute("""
+                const player = document.querySelector('.player');
+                const cover = document.querySelector('.cover');
+                const box = cover.getBoundingClientRect();
+                const label = player.querySelector('.panel-label').getBoundingClientRect();
+                return {width: box.width, height: box.height, playerWidth: player.clientWidth,
+                    gap: box.top - label.bottom, border: getComputedStyle(cover).borderTopWidth};
+            """)
+        artwork = artwork_geometry()
+        assert abs(artwork['width'] - artwork['playerWidth']) <= 1 and abs(artwork['width'] - artwork['height']) <= 1, f'Artwork not full-width square: {artwork}'
+        assert artwork['gap'] == 0 and artwork['border'] == '0px', f'Artwork has gutter or border: {artwork}'
+        assert execute("return document.querySelector('.masthead').getBoundingClientRect().height === 36;"), 'Header not 36 logical pixels'
+        assert execute("return document.querySelector('.app').classList.contains('chrome-custom') && document.querySelectorAll('.window-controls button:not(:disabled)').length === 3 && document.querySelectorAll('.resize-target').length === 8;"), 'Native chrome not ready'
         assert execute("return document.querySelector('button[aria-label=Play]').disabled;")
         assert execute("return document.querySelector('.stream-quality').textContent === 'Stream quality: unavailable';")
         wait_script("return document.querySelector('.brand-symbol').complete && document.querySelector('.brand-symbol').naturalWidth > 0;")
@@ -122,6 +137,74 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             }));
         """)
         assert all(pair['ratio'] >= 4.5 for pair in contrast), 'Text contrast below 4.5:1'
+        if args.chrome_only:
+            display_env = {**os.environ, **json.loads((Path(data) / 'display').read_text())}
+            def desktop(*parts):
+                return subprocess.check_output(list(parts), env=display_env, text=True).strip()
+            wid = desktop('xdotool', 'search', '--onlyvisible', '--name', '^Melora$').splitlines()[0]
+            def click(selector):
+                box = execute("""const b=document.querySelector(arguments[0]).getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2};""", selector)
+                rect = call('GET', '/window/rect')
+                desktop('xdotool', 'mousemove', str(round(rect['x']+box['x'])), str(round(rect['y']+box['y'])), 'click', '1')
+            click('[aria-label="Maximise window"]')
+            wait_script("""return !!document.querySelector('[aria-label="Restore window"]') && !document.querySelector('.resize-target');""")
+            assert call('GET', '/window/rect')['width'] == screen_width
+            click('[aria-label="Restore window"]')
+            wait_script("""return !!document.querySelector('[aria-label="Maximise window"]') && document.querySelectorAll('.resize-target').length === 8;""")
+            execute("window.__chromeClicks=[];document.addEventListener('mousedown',e=>window.__chromeClicks.push({detail:e.detail,target:e.target.tagName,x:e.clientX,y:e.clientY}),true);")
+            time.sleep(.6)  # Let the native click count reset before dragging.
+            rect = call('GET', '/window/rect')
+            desktop('xdotool', 'mousemove', str(rect['x']+400), str(rect['y']+18), 'mousedown', '1', 'sleep', '.08', 'mouseup', '1', 'sleep', '.08', 'mousedown', '1', 'sleep', '.08', 'mouseup', '1')
+            wait_script("""return !!document.querySelector('[aria-label="Restore window"]');""")
+            time.sleep(.6)  # Start a fresh double-click, rather than a quadruple-click.
+            desktop('xdotool', 'mousemove', '400', '18', 'mousedown', '1', 'sleep', '.08', 'mouseup', '1', 'sleep', '.08', 'mousedown', '1', 'sleep', '.08', 'mouseup', '1')
+            wait_script("""return !!document.querySelector('[aria-label="Maximise window"]');""")
+            time.sleep(.6)  # Let the native click count reset before dragging.
+            rect = call('GET', '/window/rect')
+            desktop('xdotool', 'mousemove', str(rect['x']+400), str(rect['y']+18), 'mousedown', '1', 'sleep', '.2', 'mousemove', str(rect['x']+430), str(rect['y']+48), 'sleep', '.2', 'mouseup', '1')
+            time.sleep(.2)
+            moved = call('GET', '/window/rect')
+            assert abs(moved['x']-rect['x']-30) <= 1 and abs(moved['y']-rect['y']-30) <= 1, f'Header dragging failed: {rect} -> {moved}'
+            # Resize every thin edge/corner with real native mouse events.
+            resize_results = []
+            for edge in ['North','South','East','West','NorthEast','NorthWest','SouthEast','SouthWest']:
+                call('POST', '/window/rect', {'x':200,'y':100,'width':1000,'height':700})
+                before = call('GET', '/window/rect')
+                box = execute("""const b=document.querySelector('[data-resize-edge="'+arguments[0]+'"]').getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2};""", edge)
+                px,py = round(before['x']+box['x']), round(before['y']+box['y'])
+                dx = 20 if 'East' in edge else -20 if 'West' in edge else 0
+                dy = 20 if 'South' in edge else -20 if 'North' in edge else 0
+                desktop('xdotool','mousemove',str(px),str(py),'mousedown','1','sleep','.2','mousemove',str(px+dx),str(py+dy),'sleep','.2','mouseup','1')
+                time.sleep(.2)
+                after = call('GET','/window/rect')
+                assert after['width'] == before['width']+(20 if dx else 0) and after['height'] == before['height']+(20 if dy else 0), f'Resize {edge} failed: {before} -> {after}'
+                resize_results.append({'edge':edge,'before':before,'after':after})
+            # Keyboard access must invoke minimise, without a header drag.
+            execute("""document.querySelector('[aria-label="Minimise window"]').focus();""")
+            call('POST','/actions',{'actions':[{'type':'key','id':'keyboard','actions':[
+                {'type':'keyDown','value':'\ue004'},{'type':'keyUp','value':'\ue004'},
+                {'type':'keyDown','value':'\ue008'},
+                {'type':'keyDown','value':'\ue004'},{'type':'keyUp','value':'\ue004'},
+                {'type':'keyUp','value':'\ue008'}]}]})
+            assert execute("""const b=document.activeElement.getBoundingClientRect(); const h=document.querySelector('.masthead').getBoundingClientRect(); return document.activeElement.getAttribute('aria-label') === 'Minimise window' && getComputedStyle(document.activeElement).outlineStyle !== 'none' && b.top >= h.top && b.bottom <= h.bottom;"""), 'Window keyboard focus missing or clipped'
+            (output / 'melora-linux-header-focus.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+            call('POST','/actions',{'actions':[{'type':'key','id':'keyboard','actions':[{'type':'keyDown','value':'\ue007'},{'type':'keyUp','value':'\ue007'}]}]})
+            for _ in range(40):
+                if 'Iconic' in desktop('xprop','-id',wid,'WM_STATE'): break
+                time.sleep(.1)
+            assert 'Iconic' in desktop('xprop','-id',wid,'WM_STATE'), 'Minimise did not iconify native window'
+            desktop('xdotool','windowmap',wid,'windowactivate','--sync',wid)
+            wait_script("""return document.hasFocus();""")
+            click('[aria-label="Close window"]')
+            for _ in range(40):
+                result = subprocess.run(['xdotool','getwindowname',wid],env=display_env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                if result.returncode: break
+                time.sleep(.1)
+            assert result.returncode, 'Close did not destroy native window'
+            session = None
+            (output / 'chrome-acceptance.json').write_text(json.dumps({'environment':'Linux X11 Openbox under Xvfb; no real desktop or Wayland', 'controls':'native minimise/maximise/restore/close passed', 'header':'native drag and double click passed', 'resize_edges':resize_results, 'windows_macos':'unavailable'},indent=2)+'\n')
+            print('Native Linux/Openbox chrome passed: controls, keyboard minimise, drag/double-click, all resize edges/corners.')
+            sys.exit(0)
         # Actual keyboard events, rather than a click simulation.
         def key(value):
             call('POST', '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': [
@@ -155,7 +238,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert execute("return getComputedStyle(document.activeElement).outlineStyle !== 'none';")
         execute("document.querySelectorAll('.nav-item')[2].click();")
         wait_script("return !!document.querySelector('select');")
-        cases = [(width, height, scale) for width, heights in [(1440, [820, 660, 520]), (1360, [940, 660, 520])] for height in heights for scale in [100, 125, 150, 175, 200]]
+        cases = [(width, height, scale) for width, heights in [(1440, [940, 820, 660, 520]), (1360, [940, 660, 520])] for height in heights for scale in [100, 125, 150, 175, 200]]
         cases += [(720, 850, 100), (720, 850, 200)]
         geometry = []
         for width, height, scale in cases:
@@ -177,6 +260,8 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             assert execute('return document.documentElement.scrollWidth <= innerWidth;'), f'Horizontal overflow at {width}px/{scale}%'
             assert execute("return document.querySelector('.status-strip').getBoundingClientRect().bottom <= innerHeight + 1;"), 'Status strip outside viewport'
             assert execute("return document.querySelector('.mode-status').textContent === 'Shuffle: On · Repeat: Song';"), 'Modes lost during navigation'
+            artwork = artwork_geometry()
+            assert abs(artwork['width'] - artwork['playerWidth']) <= 1 and abs(artwork['width'] - artwork['height']) <= 1, f'Artwork lost proportions: {artwork}'
             geometry.append(execute("""
                 const player = document.querySelector('.player');
                 const cover = document.querySelector('.cover');
@@ -184,7 +269,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                     playerHeight: player.clientHeight, playerScrollHeight: player.scrollHeight,
                     artworkHeight: cover.clientHeight};
             """, scale))
-            if width == 1440 and height == 820 and scale == 100:
+            if width == 1440 and height == 940 and scale == 100:
                 assert geometry[-1]['playerScrollHeight'] <= geometry[-1]['playerHeight'] + 1, 'Full player does not fit at preferred size'
             execute("document.querySelector('.transport button').focus();")
             # Establish keyboard modality after native resize/reflow.
@@ -235,7 +320,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             'platform': 'linux', 'ipc': 'passed', 'keyboard_selection': 'passed',
             'local_fonts': 'passed', 'scaling': '100–200%, 720, 1360 and 1440px',
             'status_strip': 'visible', 'preferences_relaunch': 'passed',
-            'brand_icon': 'loaded', 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
+            'brand_icon': 'loaded', 'artwork_geometry': artwork, 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
             'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar',
             'preview_modes': 'keyboard toggle/cycle, navigation retention and relaunch reset passed',
             'player_geometry': geometry,

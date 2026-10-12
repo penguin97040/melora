@@ -15,12 +15,13 @@
         "label": "main",
         "title": "Melora",
         "width": 1440,
-        "height": 820,
+        "height": 940,
         "visible": false,
         "minWidth": 720,
         "minHeight": 520,
-        "decorations": true,
-        "backgroundColor": "#080e0b"
+        "decorations": false,
+        "backgroundColor": "#080e0b",
+        "resizable": true
       }
     ],
     "security": {

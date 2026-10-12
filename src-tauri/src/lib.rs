@@ -16,6 +16,18 @@ struct AppInfo {
 }
 
 #[tauri::command]
+fn window_chrome(window: tauri::WebviewWindow) -> Result<&'static str, String> {
+    if window.label() != "main" {
+        return Err("Only the main application window can request window controls.".into());
+    }
+    Ok(if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "custom"
+    })
+}
+
+#[tauri::command]
 fn app_info(store: tauri::State<'_, Mutex<Store>>) -> Result<AppInfo, String> {
     let store = store
         .lock()
@@ -91,6 +103,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            window_chrome,
             app_info,
             save_preferences,
             show_main_window

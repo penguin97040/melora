@@ -11,16 +11,16 @@ export function Player({ track }: { track: PreviewTrack }) {
         <span>Now playing</span>
         <span>Preview</span>
       </div>
+      <div
+        className="cover"
+        role="img"
+        aria-label="Abstract synthetic preview artwork"
+      >
+        <div className="cover-orbit" />
+        <span className="cover-mark">m.</span>
+        <span className="cover-caption">AFTER THE QUIET / 001</span>
+      </div>
       <div className="player-body">
-        <div
-          className="cover"
-          role="img"
-          aria-label="Abstract synthetic preview artwork"
-        >
-          <div className="cover-orbit" />
-          <span className="cover-mark">m.</span>
-          <span className="cover-caption">AFTER THE QUIET / 001</span>
-        </div>
         <p className="eyebrow">Selected preview track</p>
         <h2 className="track-title">{track.title}</h2>
         <p className="artist-name">{track.artist}</p>

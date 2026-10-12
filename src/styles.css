@@ -94,11 +94,13 @@ p {
 }
 .masthead {
   min-height: 2.25rem;
+  height: 2.25rem;
   display: flex;
   align-items: center;
-  padding: 0.25rem 0.85rem;
+  padding: 0 0 0 0.85rem;
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
+  justify-content: space-between;
+  user-select: none;
 }
 .brand {
   display: flex;
@@ -362,12 +364,11 @@ p {
   top: 0;
 }
 .cover {
-  width: min(100%, clamp(8rem, calc(100cqh - 34rem), 18rem));
+  width: 100%;
   aspect-ratio: 1;
   position: relative;
   overflow: hidden;
-  border: 1px solid var(--orange);
-  margin: 0 auto var(--player-gap);
+  margin: 0;
   background:
     repeating-linear-gradient(
       0deg,
@@ -650,9 +651,6 @@ select {
   .player-body {
     position: static;
   }
-  .cover {
-    width: min(100%, 15rem);
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -733,4 +731,95 @@ select {
       overflow-y: auto;
     }
   }
+}
+
+/* Native chrome shares the compact masthead; controls never initiate a drag. */
+.chrome-macos .masthead {
+  padding-left: 92px;
+}
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  padding: 3px;
+  gap: 2px;
+}
+.window-controls button {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  min-height: 0;
+  color: var(--cyan);
+  background: var(--control);
+}
+.window-controls button:focus-visible {
+  outline-offset: -3px;
+}
+.window-controls .window-close:hover:not(:disabled) {
+  background: var(--selection);
+  color: var(--orange);
+}
+.window-controls svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.resize-target {
+  position: fixed;
+  z-index: 10;
+  touch-action: none;
+}
+.resize-north,
+.resize-south {
+  left: 8px;
+  right: 8px;
+  height: 4px;
+  cursor: ns-resize;
+}
+.resize-north {
+  top: 0;
+}
+.resize-south {
+  bottom: 0;
+}
+.resize-east,
+.resize-west {
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  cursor: ew-resize;
+}
+.resize-east {
+  right: 0;
+}
+.resize-west {
+  left: 0;
+}
+.resize-northwest,
+.resize-northeast,
+.resize-southwest,
+.resize-southeast {
+  width: 8px;
+  height: 8px;
+}
+.resize-northwest {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.resize-northeast {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.resize-southwest {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.resize-southeast {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
 }

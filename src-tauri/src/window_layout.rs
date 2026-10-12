@@ -1,6 +1,6 @@
 use tauri::{LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-const PREFERRED: LogicalSize<f64> = LogicalSize::new(1440.0, 820.0);
+const PREFERRED: LogicalSize<f64> = LogicalSize::new(1440.0, 940.0);
 const MINIMUM: LogicalSize<f64> = LogicalSize::new(720.0, 520.0);
 
 struct OpeningLayout {
@@ -96,6 +96,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn platform_configs_preserve_hidden_opening_and_native_chrome_contract() {
+        for (source, macos) in [
+            (include_str!("../tauri.conf.json"), false),
+            (include_str!("../tauri.macos.conf.json"), true),
+        ] {
+            let config: serde_json::Value = serde_json::from_str(source).unwrap();
+            let window: tauri::utils::config::WindowConfig =
+                serde_json::from_value(config["app"]["windows"][0].clone()).unwrap();
+            assert_eq!(window.label, "main");
+            assert_eq!(
+                (window.width, window.height),
+                (PREFERRED.width, PREFERRED.height)
+            );
+            assert!(!window.visible);
+            assert!(window.resizable);
+            assert_eq!(window.decorations, macos);
+            if macos {
+                assert!(window.hidden_title);
+                assert!(matches!(
+                    window.title_bar_style,
+                    tauri::TitleBarStyle::Overlay
+                ));
+                assert!(window.traffic_light_position.is_some());
+            }
+        }
+    }
+
+    #[test]
     fn preferred_client_size_reserves_decorations_and_centres_in_work_area() {
         let layout = opening_layout(
             tauri::PhysicalRect {
@@ -105,8 +133,8 @@ mod tests {
             1.0,
             PhysicalSize::new(16, 39),
         );
-        assert_eq!(layout.size, PhysicalSize::new(1440, 820));
-        assert_eq!(layout.position, PhysicalPosition::new(-1688, 130));
+        assert_eq!(layout.size, PhysicalSize::new(1440, 940));
+        assert_eq!(layout.position, PhysicalPosition::new(-1688, 70));
     }
 
     #[test]
@@ -137,7 +165,7 @@ mod tests {
             2.0,
             PhysicalSize::new(32, 78),
         );
-        assert_eq!(layout.size, PhysicalSize::new(2880, 1640));
+        assert_eq!(layout.size, PhysicalSize::new(2880, 1880));
         assert_eq!(layout.minimum, PhysicalSize::new(1440, 1040));
     }
 

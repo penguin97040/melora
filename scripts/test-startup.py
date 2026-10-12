@@ -118,7 +118,7 @@ try:
                         if first_visible is None:
                             first_visible = elapsed
                         rect = [attrs.x, attrs.y, attrs.width, attrs.height]
-                        assert rect == [240, 130, 1440, 820], f'Visible window moved/resized: {rect}'
+                        assert rect == [240, 70, 1440, 940], f'Visible window moved/resized: {rect}'
                         # Sample the centre panel at several positions. A blank native
                         # background or black frame cannot have its distinct colour.
                         image = x.XGetImage(display, window, 0, 0, attrs.width,

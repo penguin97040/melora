@@ -3,12 +3,18 @@ import { StrictMode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import App from './App';
-import { getAppInfo, savePreferences, showMainWindow } from './native/client';
+import {
+  getAppInfo,
+  getWindowChrome,
+  savePreferences,
+  showMainWindow,
+} from './native/client';
 import type { AppInfo } from './native/client';
 
 vi.mock('./native/client', () => ({
   defaultPreferences: { scale: 100, comfortable: false, volume: 70 },
   getAppInfo: vi.fn(),
+  getWindowChrome: vi.fn(),
   savePreferences: vi.fn(),
   showMainWindow: vi.fn(),
   hasNativeStorage: () => true,
@@ -16,6 +22,7 @@ vi.mock('./native/client', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getWindowChrome).mockResolvedValue('preview');
   vi.mocked(getAppInfo).mockResolvedValue({
     version: '0.1.0',
     platform: 'windows',
@@ -58,6 +65,35 @@ describe('preview shell', () => {
       .setup()
       .click(screen.getByRole('button', { name: /Settings/ }));
     expect(showMainWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for native chrome independently of preferences before revealing', async () => {
+    let resolveChrome!: (mode: 'macos') => void;
+    vi.mocked(getWindowChrome).mockReturnValue(
+      new Promise((resolve) => {
+        resolveChrome = resolve;
+      }),
+    );
+    render(<App />);
+    await screen.findByText('v0.1.0 / windows');
+    expect(showMainWindow).not.toHaveBeenCalled();
+    await act(async () => resolveChrome('macos'));
+    expect(showMainWindow).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole('group', { name: 'Window controls' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reveals a usable shell with an error if chrome detection fails', async () => {
+    vi.mocked(getWindowChrome).mockRejectedValue(
+      new Error('synthetic failure'),
+    );
+    render(<App />);
+    await waitFor(() => expect(showMainWindow).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Window controls could not be loaded',
+    );
+    expect(screen.getByRole('button', { name: 'Close window' })).toBeDisabled();
   });
 
   it('reveals the default shell and an error when initial preferences fail', async () => {

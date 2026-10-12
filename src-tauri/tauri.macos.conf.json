@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Melora",
+        "width": 1440,
+        "height": 940,
+        "visible": false,
+        "minWidth": 720,
+        "minHeight": 520,
+        "decorations": true,
+        "backgroundColor": "#080e0b",
+        "resizable": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 12,
+          "y": 11
+        }
+      }
+    ]
+  }
+}

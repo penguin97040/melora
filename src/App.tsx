@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { Player } from './components/Player';
-import brandIcon from '../src-tauri/icons/source.svg';
+import { WindowHeader } from './components/WindowHeader';
 import {
   defaultPreferences,
   getAppInfo,
+  getWindowChrome,
   hasNativeStorage,
   savePreferences,
   showMainWindow,
 } from './native/client';
-import type { AppInfo, Preferences } from './native/client';
+import type { AppInfo, Preferences, WindowChrome } from './native/client';
 import { previewPlaylists, previewTracks } from './preview';
 
 type View = 'Library' | 'Search' | 'Settings';
@@ -22,6 +23,9 @@ export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [storageMessage, setStorageMessage] = useState<string | null>(null);
+  const [chrome, setChrome] = useState<WindowChrome>('preview');
+  const [chromeSettled, setChromeSettled] = useState(false);
+  const [windowMessage, setWindowMessage] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [preferencesSettled, setPreferencesSettled] = useState(false);
   const revealRequested = useRef(false);
@@ -53,6 +57,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    void getWindowChrome()
+      .then((mode) => {
+        if (active) setChrome(mode);
+      })
+      .catch(() => {
+        if (active)
+          setWindowMessage(
+            'Window controls could not be loaded. Relaunch Melora to try again.',
+          );
+      })
+      .finally(() => {
+        if (active) setChromeSettled(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     document.documentElement.style.fontSize = `${preferences.scale}%`;
     return () => {
       document.documentElement.style.fontSize = '';
@@ -62,14 +86,15 @@ export default function App() {
   useEffect(() => {
     // Effects run after the shell commits; the scale effect above has also run.
     // Hidden WebViews need no animation-frame wait to signal readiness.
-    if (!preferencesSettled || revealRequested.current) return;
+    if (!preferencesSettled || !chromeSettled || revealRequested.current)
+      return;
     revealRequested.current = true;
     void showMainWindow().catch(() => {
       setStorageMessage(
         'The application window could not be shown. Relaunch Melora to try again.',
       );
     });
-  }, [preferencesSettled]);
+  }, [preferencesSettled, chromeSettled]);
 
   useEffect(() => {
     if (view === 'Search') searchRef.current?.focus();
@@ -101,16 +126,13 @@ export default function App() {
   );
 
   return (
-    <div className={`app ${preferences.comfortable ? 'comfortable' : ''}`}>
+    <div
+      className={`app chrome-${chrome} ${preferences.comfortable ? 'comfortable' : ''}`}
+    >
       <a className="skip-link" href="#content">
         Skip to content
       </a>
-      <header className="masthead">
-        <div className="brand">
-          <img className="brand-symbol" src={brandIcon} alt="" />
-          <span>melora</span>
-        </div>
-      </header>
+      <WindowHeader chrome={chrome} onError={setWindowMessage} />
       <div className="workspace">
         <aside className="sidebar panel">
           <nav aria-label="Main navigation">
@@ -170,6 +192,11 @@ export default function App() {
             <span>{view}</span>
             <span>Local / preview</span>
           </div>
+          {windowMessage && (
+            <p className="error-message" role="alert">
+              {windowMessage}
+            </p>
+          )}
           {storageMessage && (
             <p className="error-message" role="alert">
               {storageMessage}
