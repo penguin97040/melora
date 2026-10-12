@@ -1,6 +1,6 @@
 use tauri::{LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-const PREFERRED: LogicalSize<f64> = LogicalSize::new(1360.0, 940.0);
+const PREFERRED: LogicalSize<f64> = LogicalSize::new(1440.0, 820.0);
 const MINIMUM: LogicalSize<f64> = LogicalSize::new(720.0, 520.0);
 
 struct OpeningLayout {
@@ -76,23 +76,19 @@ pub fn fit_opening_window(window: &WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn initialise(window: &WebviewWindow) -> tauri::Result<()> {
-    use std::sync::atomic::{AtomicBool, Ordering};
+#[derive(Default)]
+pub struct StartupWindow {
+    shown: bool,
+}
 
-    fit_opening_window(window)?;
-    let realised = AtomicBool::new(false);
-    let opening_window = window.clone();
-    // Some window managers report decorations only after the first native
-    // configure/resize event. Re-measure once, then leave user resizing alone.
-    window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::Resized(_))
-            && !realised.swap(true, Ordering::Relaxed)
-            && fit_opening_window(&opening_window).is_err()
-        {
-            eprintln!("Melora could not fit the opening window to the monitor work area.");
+impl StartupWindow {
+    pub fn reveal<E>(&mut self, finish_and_show: impl FnOnce() -> Result<(), E>) -> Result<(), E> {
+        if !self.shown {
+            finish_and_show()?;
+            self.shown = true;
         }
-    });
-    Ok(())
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -109,8 +105,8 @@ mod tests {
             1.0,
             PhysicalSize::new(16, 39),
         );
-        assert_eq!(layout.size, PhysicalSize::new(1360, 940));
-        assert_eq!(layout.position, PhysicalPosition::new(-1648, 70));
+        assert_eq!(layout.size, PhysicalSize::new(1440, 820));
+        assert_eq!(layout.position, PhysicalPosition::new(-1688, 130));
     }
 
     #[test]
@@ -141,7 +137,39 @@ mod tests {
             2.0,
             PhysicalSize::new(32, 78),
         );
-        assert_eq!(layout.size, PhysicalSize::new(2720, 1880));
+        assert_eq!(layout.size, PhysicalSize::new(2880, 1640));
         assert_eq!(layout.minimum, PhysicalSize::new(1440, 1040));
+    }
+
+    #[test]
+    fn duplicate_readiness_does_not_resize_or_reveal_again() {
+        let mut startup = StartupWindow::default();
+        let mut operations = Vec::new();
+        startup
+            .reveal(|| {
+                operations.extend(["fit", "show"]);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        operations.push("user resize");
+        startup
+            .reveal(|| {
+                operations.extend(["fit", "show"]);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert_eq!(operations, ["fit", "show", "user resize"]);
+    }
+
+    #[test]
+    fn failed_reveal_can_be_retried() {
+        let mut startup = StartupWindow::default();
+        assert_eq!(
+            startup.reveal(|| Err("fixture failure")),
+            Err("fixture failure")
+        );
+        assert!(!startup.shown);
+        assert_eq!(startup.reveal(|| Ok::<_, ()>(())), Ok(()));
+        assert!(startup.shown);
     }
 }

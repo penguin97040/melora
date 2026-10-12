@@ -18,6 +18,7 @@
   color-scheme: dark;
   --background: #080e0b;
   --surface: #122a1e;
+  --surface-content: #0e2118;
   --surface-raised: #20412f;
   --control: #19373c;
   --active-mode: #78ffad;
@@ -236,7 +237,7 @@ p {
   line-height: 1.6;
 }
 .content {
-  background: var(--surface);
+  background: var(--surface-content);
 }
 .collection-heading,
 .settings {

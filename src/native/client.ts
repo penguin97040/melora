@@ -39,3 +39,8 @@ export async function savePreferences(
 export function hasNativeStorage(): boolean {
   return isTauri();
 }
+
+export async function showMainWindow(): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>('show_main_window');
+}

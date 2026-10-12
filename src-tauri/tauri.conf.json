@@ -14,8 +14,9 @@
       {
         "label": "main",
         "title": "Melora",
-        "width": 1360,
-        "height": 940,
+        "width": 1440,
+        "height": 820,
+        "visible": false,
         "minWidth": 720,
         "minHeight": 520,
         "decorations": true,

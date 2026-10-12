@@ -2,12 +2,15 @@
 
 Run after `npm run tauri build -- --debug --no-bundle`:
 python3 scripts/test-native.py /absolute/path/to/melora
-Requires Xvfb and WebKitWebDriver. Uses isolated disposable application data.
+Requires Xvfb, xdotool and WebKitWebDriver. Uses isolated disposable application data.
 """
 import base64
 import argparse
 import json
+import os
 import re
+import signal
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -28,11 +31,16 @@ exe = str(Path(args.executable).resolve())
 output = Path('artifacts/runtime')
 output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
     driver = subprocess.Popen(['xvfb-run', '-a', '-s', f'-screen 0 {args.screen}x24', 'env', 'TAURI_WEBVIEW_AUTOMATION=true',
                                f'GDK_SCALE={args.device_scale}',
                                'WEBKIT_DISABLE_COMPOSITING_MODE=1', 'XDG_DATA_HOME=' + data,
-                               'WebKitWebDriver', '--port=4445'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    base = 'http://127.0.0.1:4445'
+                               'python3', '-c',
+                               "import os,sys,json;from pathlib import Path;Path(sys.argv[1]).write_text(json.dumps({key:os.environ[key] for key in ['DISPLAY','XAUTHORITY']}));os.execvp('WebKitWebDriver',['WebKitWebDriver','--port='+sys.argv[2]])",
+                               str(Path(data) / 'display'), str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    base = f'http://127.0.0.1:{port}'
     session = None
     try:
         def request(method, route, payload=None):
@@ -52,7 +60,14 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
 
         session = launch()
         def call(method, route, payload=None):
-            return request(method, '/session/' + session + route, payload)
+            result = request(method, '/session/' + session + route, payload)
+            if method == 'POST' and route == '/window/rect':
+                # Unmanaged X11 loses activation on some WebDriver resizes.
+                # Simulate the focused desktop window without altering CSS.
+                subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', '^Melora$', 'windowfocus'],
+                               env={**os.environ, **json.loads((Path(data) / 'display').read_text())},
+                               check=True, stdout=subprocess.DEVNULL)
+            return result
         def execute(script, *args):
             return call('POST', '/execute/sync', {'script': script, 'args': list(args)})
         def wait_script(script):
@@ -63,32 +78,36 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             raise AssertionError('Native UI assertion timed out')
         wait_script("return document.body.innerText.includes('v0.1.0 / linux');")
         opening_size = execute('return {width: innerWidth, height: innerHeight};')
+        opening_rect = call('GET', '/window/rect')
+        assert abs(opening_rect['x'] - (screen_width / args.device_scale - opening_rect['width']) / 2) <= 1 and abs(opening_rect['y'] - (screen_height / args.device_scale - opening_rect['height']) / 2) <= 1, f'Opening window not centred: {opening_rect}, client {opening_size}'
         if args.opening_only:
             assert opening_size == {
-                'width': min(1360, screen_width // args.device_scale),
-                'height': min(940, screen_height // args.device_scale),
+                'width': min(1440, screen_width // args.device_scale),
+                'height': min(820, screen_height // args.device_scale),
             }, f'Opening size not bounded to simulated monitor: {opening_size}'
             rect = call('GET', '/window/rect')
             assert rect['x'] >= 0 and rect['y'] >= 0, 'Opening position outside monitor'
-            assert rect['x'] + rect['width'] <= screen_width and rect['y'] + rect['height'] <= screen_height, 'Outer window outside monitor'
+            assert rect['x'] + rect['width'] <= screen_width / args.device_scale and rect['y'] + rect['height'] <= screen_height / args.device_scale, 'Outer window outside monitor'
             evidence = {'screen': args.screen, 'device_scale': args.device_scale,
                         'opening_client': opening_size, 'outer_rect': rect,
+                        'rect_units': 'GTK/WebDriver logical pixels',
                         'decorations': 'No window manager in Xvfb; subtraction unit-tested',
                         'actual_os_dpi': 'not tested'}
             (output / f'opening-{args.screen}-{args.device_scale}.json').write_text(json.dumps(evidence, indent=2) + '\n')
             print(f'Native opening bounds passed: {args.screen} physical pixels, simulated GTK scale {args.device_scale}.')
             sys.exit(0)
-        assert opening_size == {'width': 1360, 'height': 940}, 'Preferred opening client size not applied'
+        assert opening_size == {'width': 1440, 'height': 820}, 'Preferred opening client size not applied'
         assert execute("return document.querySelector('.player').scrollHeight <= document.querySelector('.player').clientHeight + 1;"), 'Preferred player requires scrolling'
         (output / 'melora-linux-preferred.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         assert execute("return document.querySelector('button[aria-label=Play]').disabled;")
         assert execute("return document.querySelector('.stream-quality').textContent === 'Stream quality: unavailable';")
         wait_script("return document.querySelector('.brand-symbol').complete && document.querySelector('.brand-symbol').naturalWidth > 0;")
         assert execute("return document.fonts.check('16px \"Share Tech Mono\"') && document.fonts.check('16px \"Chakra Petch\"') && document.fonts.check('16px \"Ubuntu Mono\"');")
+        assert execute("return getComputedStyle(document.querySelector('.content')).backgroundColor === 'rgb(14, 33, 24)' && getComputedStyle(document.querySelector('.playlist-item.selected')).backgroundColor === 'rgb(18, 42, 30)';"), 'Centre/side panel backgrounds changed incorrectly'
         contrast = execute("""
             const css = getComputedStyle(document.documentElement);
             const names = ['--text', '--muted', '--cyan', '--orange', '--active-mode'];
-            const surfaces = ['--background', '--surface', '--surface-raised', '--control', '--selection'];
+            const surfaces = ['--background', '--surface-content', '--surface', '--surface-raised', '--control', '--selection'];
             function luminance(hex) {
                 const channels = hex.trim().slice(1).match(/../g).map(value => {
                     const v = parseInt(value, 16) / 255;
@@ -108,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             call('POST', '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': [
                 {'type': 'keyDown', 'value': value}, {'type': 'keyUp', 'value': value}]}]})
         def visible_focus():
-            assert execute("return getComputedStyle(document.activeElement).outlineStyle !== 'none';"), 'Keyboard focus outline missing'
+            assert execute("return getComputedStyle(document.activeElement).outlineStyle !== 'none';"), 'Keyboard focus outline missing: ' + str(execute("return {width:innerWidth,height:innerHeight,scale:document.documentElement.style.fontSize,focus:document.hasFocus(),active:document.activeElement.outerHTML,match:document.activeElement.matches(':focus-visible')};"))
             assert execute("""
                 const box = document.activeElement.getBoundingClientRect();
                 const player = document.querySelector('.player').getBoundingClientRect();
@@ -136,7 +155,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert execute("return getComputedStyle(document.activeElement).outlineStyle !== 'none';")
         execute("document.querySelectorAll('.nav-item')[2].click();")
         wait_script("return !!document.querySelector('select');")
-        cases = [(1360, height, scale) for height in [940, 660, 520] for scale in [100, 125, 150, 175, 200]]
+        cases = [(width, height, scale) for width, heights in [(1440, [820, 660, 520]), (1360, [940, 660, 520])] for height in heights for scale in [100, 125, 150, 175, 200]]
         cases += [(720, 850, 100), (720, 850, 200)]
         geometry = []
         for width, height, scale in cases:
@@ -165,12 +184,19 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                     playerHeight: player.clientHeight, playerScrollHeight: player.scrollHeight,
                     artworkHeight: cover.clientHeight};
             """, scale))
-            if width == 1360 and height == 940 and scale == 100:
+            if width == 1440 and height == 820 and scale == 100:
                 assert geometry[-1]['playerScrollHeight'] <= geometry[-1]['playerHeight'] + 1, 'Full player does not fit at preferred size'
             execute("document.querySelector('.transport button').focus();")
+            # Establish keyboard modality after native resize/reflow.
+            # Use a real keyboard Tab before checking the keyboard outline.
+            key('\ue004')
             execute("document.activeElement.scrollIntoView({block: 'nearest'});")
             visible_focus()
-            key('\ue004')
+            call('POST', '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': [
+                {'type': 'keyDown', 'value': '\ue008'},
+                {'type': 'keyDown', 'value': '\ue004'}, {'type': 'keyUp', 'value': '\ue004'},
+                {'type': 'keyUp', 'value': '\ue008'}]}]})
+            execute("document.activeElement.scrollIntoView({block: 'nearest'});")
             visible_focus()
             assert execute("""
                 const buttons = [...document.querySelectorAll('.transport button')].map(button => button.getBoundingClientRect());
@@ -185,7 +211,11 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert execute('return scrollY === 0 && document.documentElement.scrollHeight <= innerHeight + 1;'), 'Shell overflow moved the persistent status strip'
         shot = call('GET', '/screenshot')
         (output / 'melora-linux-200-percent.png').write_bytes(base64.b64decode(shot))
-        call('POST', '/window/rect', {'width': 1360, 'height': 850})
+        call('POST', '/window/rect', {'width': 1360, 'height': 850, 'x': 30, 'y': 40})
+        user_rect = call('GET', '/window/rect')
+        execute("window.__revealTestDone = false; window.__TAURI_INTERNALS__.invoke('show_main_window').then(() => window.__TAURI_INTERNALS__.invoke('show_main_window')).then(() => { window.__revealTestDone = true; });")
+        wait_script('return window.__revealTestDone;')
+        assert call('GET', '/window/rect') == user_rect, 'Duplicate readiness changed user geometry'
         execute("const el=document.querySelector('select');el.value='125';el.dispatchEvent(new Event('change',{bubbles:true}));")
         wait_script("return document.documentElement.style.fontSize === '125%';")
         preferences_path = Path(data) / 'app.melora.desktop/preferences.json'
@@ -203,9 +233,9 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         (output / 'melora-linux-restored.png').write_bytes(base64.b64decode(shot))
         (output / 'native-acceptance.json').write_text(json.dumps({
             'platform': 'linux', 'ipc': 'passed', 'keyboard_selection': 'passed',
-            'local_fonts': 'passed', 'scaling': '100–200%, 720 and 1360px',
+            'local_fonts': 'passed', 'scaling': '100–200%, 720, 1360 and 1440px',
             'status_strip': 'visible', 'preferences_relaunch': 'passed',
-            'brand_icon': 'loaded', 'compact_header': 'passed',
+            'brand_icon': 'loaded', 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
             'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar',
             'preview_modes': 'keyboard toggle/cycle, navigation retention and relaunch reset passed',
             'player_geometry': geometry,
@@ -221,8 +251,15 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 request('DELETE', '/session/' + session)
             except (OSError, urllib.error.URLError):
                 pass
-        driver.terminate()
+        # Stop the whole Xvfb/driver process group, including wrapper children.
         try:
+            os.killpg(driver.pid, signal.SIGTERM)
             driver.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            driver.kill()
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            pass
+        finally:
+            try:
+                os.killpg(driver.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            driver.wait(timeout=5)

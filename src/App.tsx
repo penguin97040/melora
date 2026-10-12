@@ -6,6 +6,7 @@ import {
   getAppInfo,
   hasNativeStorage,
   savePreferences,
+  showMainWindow,
 } from './native/client';
 import type { AppInfo, Preferences } from './native/client';
 import { previewPlaylists, previewTracks } from './preview';
@@ -22,6 +23,8 @@ export default function App() {
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [storageMessage, setStorageMessage] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [preferencesSettled, setPreferencesSettled] = useState(false);
+  const revealRequested = useRef(false);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -40,6 +43,9 @@ export default function App() {
           setStorageMessage(
             'Native application details could not be loaded. Relaunch Melora to try again.',
           );
+      })
+      .finally(() => {
+        if (active) setPreferencesSettled(true);
       });
     return () => {
       active = false;
@@ -52,6 +58,18 @@ export default function App() {
       document.documentElement.style.fontSize = '';
     };
   }, [preferences.scale]);
+
+  useEffect(() => {
+    // Effects run after the shell commits; the scale effect above has also run.
+    // Hidden WebViews need no animation-frame wait to signal readiness.
+    if (!preferencesSettled || revealRequested.current) return;
+    revealRequested.current = true;
+    void showMainWindow().catch(() => {
+      setStorageMessage(
+        'The application window could not be shown. Relaunch Melora to try again.',
+      );
+    });
+  }, [preferencesSettled]);
 
   useEffect(() => {
     if (view === 'Search') searchRef.current?.focus();

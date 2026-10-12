@@ -39,6 +39,32 @@ fn save_preferences(
         .save(preferences)
 }
 
+#[tauri::command]
+fn show_main_window(
+    window: tauri::WebviewWindow,
+    startup: tauri::State<'_, Mutex<window_layout::StartupWindow>>,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main application window can be shown.".into());
+    }
+    startup
+        .lock()
+        .map_err(|_| "The application window is temporarily unavailable.")?
+        .reveal(|| {
+            // Complete all opening geometry while hidden. No resize handler may
+            // re-centre the window after show, including queued startup events.
+            window_layout::fit_opening_window(&window)
+                .and_then(|()| window.show())
+                .map_err(|_| "The application window could not be shown.".to_string())?;
+            // A window created hidden must also receive native keyboard focus.
+            // Failure to activate an already visible window must not repeat geometry.
+            if window.set_focus().is_err() {
+                eprintln!("Melora could not focus the application window.");
+            }
+            Ok(())
+        })
+}
+
 fn settings_directory(_app: &tauri::App) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     #[cfg(target_os = "windows")]
     {
@@ -58,12 +84,17 @@ pub fn run() {
     let result = tauri::Builder::default()
         .setup(|app| {
             app.manage(Mutex::new(Store::open(settings_directory(app)?)));
+            app.manage(Mutex::new(window_layout::StartupWindow::default()));
             if let Some(window) = app.get_webview_window("main") {
-                window_layout::initialise(&window)?;
+                window_layout::fit_opening_window(&window)?;
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_info, save_preferences])
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            save_preferences,
+            show_main_window
+        ])
         .run(tauri::generate_context!());
     if result.is_err() {
         eprintln!("Melora could not start. Check that the system WebView and application data folder are available.");

@@ -1,17 +1,21 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import App from './App';
-import { getAppInfo, savePreferences } from './native/client';
+import { getAppInfo, savePreferences, showMainWindow } from './native/client';
+import type { AppInfo } from './native/client';
 
 vi.mock('./native/client', () => ({
   defaultPreferences: { scale: 100, comfortable: false, volume: 70 },
   getAppInfo: vi.fn(),
   savePreferences: vi.fn(),
+  showMainWindow: vi.fn(),
   hasNativeStorage: () => true,
 }));
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(getAppInfo).mockResolvedValue({
     version: '0.1.0',
     platform: 'windows',
@@ -19,9 +23,72 @@ beforeEach(() => {
     storageError: null,
   });
   vi.mocked(savePreferences).mockImplementation(async (value) => value);
+  vi.mocked(showMainWindow).mockResolvedValue(undefined);
 });
 
 describe('preview shell', () => {
+  it('reveals the committed shell once after restored preferences settle in Strict Mode', async () => {
+    let resolveInfo!: (info: AppInfo) => void;
+    vi.mocked(getAppInfo).mockReturnValue(
+      new Promise((resolve) => {
+        resolveInfo = resolve;
+      }),
+    );
+    vi.mocked(showMainWindow).mockImplementation(async () => {
+      expect(document.documentElement.style.fontSize).toBe('150%');
+      expect(screen.getByText('v0.1.0 / windows')).toBeInTheDocument();
+      expect(document.querySelector('.app')).toHaveClass('comfortable');
+    });
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    expect(showMainWindow).not.toHaveBeenCalled();
+    await act(async () =>
+      resolveInfo({
+        version: '0.1.0',
+        platform: 'windows',
+        storageError: null,
+        preferences: { scale: 150, comfortable: true, volume: 40 },
+      }),
+    );
+    expect(showMainWindow).toHaveBeenCalledTimes(1);
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: /Settings/ }));
+    expect(showMainWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('reveals the default shell and an error when initial preferences fail', async () => {
+    vi.mocked(getAppInfo).mockRejectedValue(new Error('fixture failure'));
+    vi.mocked(showMainWindow).mockImplementation(async () => {
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Native application details could not be loaded',
+      );
+      expect(document.documentElement.style.fontSize).toBe('100%');
+    });
+    render(<App />);
+    await waitFor(() => expect(showMainWindow).toHaveBeenCalledTimes(1));
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: /Settings/ }));
+    expect(screen.getByRole('combobox')).toBeDisabled();
+  });
+
+  it('does not reveal from a stale preference request after unmount', async () => {
+    let rejectInfo!: (error: Error) => void;
+    vi.mocked(getAppInfo).mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectInfo = reject;
+      }),
+    );
+    const { unmount } = render(<App />);
+    unmount();
+    await act(async () => rejectInfo(new Error('fixture failure')));
+    expect(showMainWindow).not.toHaveBeenCalled();
+  });
+
   it('reports native IPC details and keeps unavailable playback disabled', async () => {
     render(<App />);
     expect(await screen.findByText('v0.1.0 / windows')).toBeInTheDocument();
