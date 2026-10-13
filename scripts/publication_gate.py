@@ -2,6 +2,7 @@
 """Local fail-closed publication audit. Diagnostics contain locations, never values."""
 import argparse
 import fnmatch
+import hashlib
 import json
 import re
 import subprocess
@@ -58,19 +59,25 @@ def findings(data, location, *, licence=False, email=None):
 
 
 def audit_blob(path, data):
+    path_results = findings(path.encode(), 'redacted path ' + hashlib.sha256(path.encode()).hexdigest()[:12])
+    # Tauri's standard retina icon name resembles an email address. Only its
+    # filename gets this exception; its contents still receive every rule.
+    if path == 'src-tauri/icons/128x128' + '@' + '2x.png':
+        path_results = [result for result in path_results if result[0] != 'personal email']
+    location = path_results[0][1] if path_results else path
     if prohibited(path):
-        return [('prohibited private/output path', path)]
+        return path_results + [('prohibited private/output path', location)]
     # Only known font/icon formats may be binary. Scan ASCII secret signatures too.
     if b'\0' in data and Path(path).suffix in {'.woff2', '.png', '.ico', '.icns'}:
-        return findings(data.decode('latin1').encode(), path)
-    return findings(data, path, licence=path.startswith('public/fonts/licences/'))
+        return path_results + findings(data.decode('latin1').encode(), location)
+    return path_results + findings(data, location, licence=path.startswith('public/fonts/licences/'))
 
 
 def policy():
     cfg = Path(git('rev-parse', '--git-path', 'melora-publication.json').decode().strip())
     try:
         data = json.loads(cfg.read_text())
-        if set(data) != {'remote', 'name', 'email'} or not all(data.values()):
+        if not isinstance(data, dict) or set(data) != {'remote', 'name', 'email'} or not all(isinstance(v, str) and v.strip() for v in data.values()):
             raise ValueError()
         if not re.fullmatch(r'\d+\+[A-Za-z0-9-]+@users\.noreply\.github\.com', data['email']):
             raise ValueError()
@@ -83,7 +90,10 @@ def audit(args):
     approved = policy()
     if git('config', 'user.name').decode().strip() != approved['name'] or git('config', 'user.email').decode().strip() != approved['email']:
         raise AuditError('Configured identity differs from local approval')
-    destination = git('remote', 'get-url', '--push', 'origin').decode().strip()
+    destinations = git('remote', 'get-url', '--push', '--all', 'origin').decode().splitlines()
+    if destinations != [approved['remote']]:
+        raise AuditError('Push destinations differ from local approval')
+    destination = destinations[0]
     if destination != approved['remote'] or (args.hook and (args.remote != 'origin' or args.url != destination)):
         raise AuditError('Push destination differs from local approval')
     if git('rev-parse', '--is-shallow-repository').strip() != b'false':
@@ -92,7 +102,7 @@ def audit(args):
     if args.hook:
         for line in sys.stdin:
             fields = line.split()
-            if len(fields) != 4:
+            if len(fields) != 4 or not all(re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', fields[i]) for i in (1, 3)):
                 raise AuditError('Invalid push ref input')
             if set(fields[1]) != {'0'}:
                 refs.append(fields[1])
@@ -111,10 +121,10 @@ def audit(args):
                 continue
             seen.add(commit)
             raw = git('show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce%x00%B', commit)
-            an, ae, cn, ce, message = raw.split(b'\0', 4)
+            an, ae, cn, ce, _message = raw.split(b'\0', 4)
             if any((name.decode() != approved['name'] or mail.decode() != approved['email']) for name, mail in ((an, ae), (cn, ce))):
                 results.append(('unapproved commit identity', commit[:12]))
-            results.extend(findings(message, 'commit ' + commit[:12]))
+            results.extend(findings(git('cat-file', 'commit', commit), 'commit ' + commit[:12], email=approved['email']))
             for entry in git('ls-tree', '-rz', '--full-tree', commit).split(b'\0'):
                 if not entry:
                     continue
@@ -138,6 +148,8 @@ def audit(args):
             path = raw.decode()
             if Path(path).is_symlink():
                 raise AuditError('Untracked symlinks require an explicit audit')
+            if Path(path).exists() and not Path(path).is_file():
+                raise AuditError('Publishable working entry is not a regular file')
             if Path(path).is_file():
                 results.extend(audit_blob(path, Path(path).read_bytes()))
     if results:

@@ -78,6 +78,27 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 time.sleep(0.1)
             raise AssertionError('Native UI assertion timed out: ' + str(execute("return {errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent), clicks:window.__chromeClicks};")))
         wait_script("return document.body.innerText.includes('v0.1.0 / linux');")
+        # Exercise the native boundary rather than only mocking frontend wrappers.
+        execute("""
+            window.__securityReview = null;
+            const invoke = window.__TAURI_INTERNALS__.invoke;
+            Promise.all([
+                invoke('plugin:window|set_title', {label: 'main', title: 'Synthetic denied title'}),
+                invoke('plugin:event|emit', {event: 'synthetic-review-event', payload: null}),
+                invoke('save_preferences', {preferences: {scale: 101, comfortable: false, volume: 70}}),
+                invoke('save_preferences', {preferences: {scale: 100, comfortable: false, volume: 70, extra: true}}),
+            ].map(operation => operation.then(() => false, () => true)))
+                .then(results => { window.__securityReview = results; });
+        """)
+        wait_script('return Array.isArray(window.__securityReview);')
+        assert execute('return window.__securityReview.every(Boolean);'), 'Unapproved IPC or invalid settings accepted'
+        original_url = execute('return location.href;')
+        execute("location.assign('https://example.invalid/'); return true;")
+        time.sleep(0.15)
+        assert execute('return location.href;') == original_url, 'Remote main-window navigation accepted'
+        execute("window.open('https://example.invalid/', '_blank'); return true;")
+        time.sleep(0.15)
+        assert len(call('GET', '/window/handles')) == 1, 'Unexpected popup window'
         opening_size = execute('return {width: innerWidth, height: innerHeight};')
         opening_rect = call('GET', '/window/rect')
         assert abs(opening_rect['x'] - (screen_width / args.device_scale - opening_rect['width']) / 2) <= 1 and abs(opening_rect['y'] - (screen_height / args.device_scale - opening_rect['height']) / 2) <= 1, f'Opening window not centred: {opening_rect}, client {opening_size}'
@@ -91,6 +112,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             assert rect['x'] + rect['width'] <= screen_width / args.device_scale and rect['y'] + rect['height'] <= screen_height / args.device_scale, 'Outer window outside monitor'
             evidence = {'screen': args.screen, 'device_scale': args.device_scale,
                         'opening_client': opening_size, 'outer_rect': rect,
+                        'security': 'native IPC denials, invalid preferences, remote navigation and popup rejection passed',
                         'rect_units': 'GTK/WebDriver logical pixels',
                         'decorations': 'No window manager in Xvfb; subtraction unit-tested',
                         'actual_os_dpi': 'not tested'}

@@ -1,3 +1,4 @@
+mod navigation;
 mod preferences;
 mod window_layout;
 
@@ -97,9 +98,22 @@ pub fn run() {
         .setup(|app| {
             app.manage(Mutex::new(Store::open(settings_directory(app)?)));
             app.manage(Mutex::new(window_layout::StartupWindow::default()));
-            if let Some(window) = app.get_webview_window("main") {
-                window_layout::fit_opening_window(&window)?;
-            }
+            let config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .ok_or("Missing main window configuration")?;
+            let dev_url = if cfg!(dev) {
+                app.config().build.dev_url.clone()
+            } else {
+                None
+            };
+            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                .on_navigation(move |url| navigation::allowed(url, dev_url.as_ref()))
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                .build()?;
+            window_layout::fit_opening_window(&window)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

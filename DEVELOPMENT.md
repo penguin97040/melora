@@ -37,7 +37,7 @@ To check opening bounds on a smaller simulated monitor, add `--opening-only --sc
 
 For repeated Linux startup measurements, build with `npm run tauri -- build --no-bundle` and run `python3 scripts/test-startup.py /absolute/path/to/release/melora`. This uses Xvfb and system libX11 to sample the hidden window, centred reveal and first-paint timing with default, restored and corrupt preferences. It records any blank samples before GTK's first paint and rejects subsequent blank frames or geometry changes. Xvfb has no compositor; verify visible flash behaviour and launch timing separately on real Windows, Linux and macOS desktops.
 
-The asset audit rejects private inputs and source maps in `dist` and unexpected native resources. Publication checks use a local pre-push hook and local destination/identity approval; run `npm run gate` explicitly before each push. The gate scans complete ancestry of outgoing commits, their trees and metadata, the index and publishable working files. It is deliberately conservative: unusual binaries, symlinks, submodules, unapproved identities or incomplete history block publication. Pattern checks require human review for unrecognised secrets and personal information.
+The asset audit rejects private inputs and source maps in `dist` and unexpected native resources. Publication checks use a local pre-push hook and local destination/identity approval; run `npm run gate` explicitly before each push. The gate scans complete ancestry of outgoing commits, their trees, paths and raw metadata, the index and publishable working files. It requires exactly one approved push destination and redacts sensitive filenames in diagnostics. It is deliberately conservative: unusual binaries, symlinks, submodules, unapproved identities or incomplete history block publication. Pattern checks require human review for unrecognised secrets and personal information.
 
 ## Windows portable build
 
@@ -55,7 +55,7 @@ cargo install --locked cargo-xwin
 npm run build:windows
 ```
 
-The build disables installers and packages only the release executable, font licences, notices, readme and empty `data` folder. Frontend assets and fonts are embedded in the executable. The WebView2 loader is linked statically; the OS WebView2 Runtime is required. ZIP path and SHA-256 are printed and the checksum is saved beside the archive.
+The build disables installers and packages only the release executable, font licences, notices, readme and empty `data` folder. Frontend assets and fonts are embedded in the executable. The WebView2 loader is linked statically; the OS WebView2 Runtime is required. The collector writes a hashed notice inventory; packaging rejects missing, altered, extra or linked notice files and checks archive CRC and exact input bytes before replacing the ZIP. ZIP path and SHA-256 are printed and the checksum is saved beside the archive.
 
 If Microsoft's SDK download is blocked, report the exact required hostname and widen the host network allowlist only for that host. Do not disable the network policy.
 
@@ -79,3 +79,23 @@ Run `python3 scripts/test-native.py /path/to/melora --chrome-only` to exercise
 controls, dragging/double-clicking and all resize edges under Openbox/Xvfb.
 Actual desktop checks are required on Windows, macOS, Linux X11 and Wayland;
 headless WebKit acceptance and cross compilation do not establish those behaviours.
+
+## Dependency review
+
+The 13 October 2026 review found no npm advisories. RustSec reports two notices in
+Tauri's Linux GTK dependency chain: [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)
+for `glib` 0.18.5 string-variant iterator unsoundness and
+[RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370.html)
+for the unmaintained `proc-macro-error` 1.0.4 build dependency. The pinned Tauri/GTK
+versions require that GLib series, whose official 0.18 branch retains the affected
+code. Melora does not use that iterator directly. A compatible upstream fix remains
+outstanding; these notices have not been suppressed. Recheck the dependency graph
+and advisory database before releases.
+
+App-defined IPC commands have generated permissions granted only to the local main
+window. Native navigation permits the bundled shell and its fragment links, or the
+exact configured development origin in a development build; remote navigation and
+popups are denied. Preferences use bounded regular-file reads, exclusive temporary
+files and a synced atomic replacement. Startup probes folder writability without
+rewriting existing settings. These protections do not claim to isolate filesystem
+operations from a hostile process already running with the same user's permissions.

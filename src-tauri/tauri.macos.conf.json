@@ -18,7 +18,8 @@
         "trafficLightPosition": {
           "x": 12,
           "y": 11
-        }
+        },
+        "create": false
       }
     ]
   }

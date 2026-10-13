@@ -90,7 +90,7 @@ export default function App() {
       return;
     revealRequested.current = true;
     void showMainWindow().catch(() => {
-      setStorageMessage(
+      setWindowMessage(
         'The application window could not be shown. Relaunch Melora to try again.',
       );
     });
@@ -116,14 +116,15 @@ export default function App() {
   }
 
   const activePlaylist = previewPlaylists[playlist]!;
-  const tracks = previewTracks.filter(
-    (track) =>
-      (!activePlaylist.artist || track.artist === activePlaylist.artist) &&
-      (view !== 'Search' ||
-        `${track.title} ${track.artist} ${track.album}`
+  const searchQuery = query.trim().toLocaleLowerCase('en-NZ');
+  const tracks = previewTracks.filter((track) =>
+    view === 'Search'
+      ? `${track.title} ${track.artist} ${track.album}`
           .toLocaleLowerCase('en-NZ')
-          .includes(query.toLocaleLowerCase('en-NZ'))),
+          .includes(searchQuery)
+      : !activePlaylist.artist || track.artist === activePlaylist.artist,
   );
+  const artistCount = new Set(tracks.map((track) => track.artist)).size;
 
   return (
     <div
@@ -282,7 +283,10 @@ export default function App() {
                 </p>
                 <div className="collection-meta">
                   <span>{tracks.length.toLocaleString('en-NZ')} tracks</span>
-                  <span>3 synthetic artists</span>
+                  <span>
+                    {artistCount.toLocaleString('en-NZ')} synthetic{' '}
+                    {artistCount === 1 ? 'artist' : 'artists'}
+                  </span>
                   <span>No audio</span>
                 </div>
               </section>

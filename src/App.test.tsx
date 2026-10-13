@@ -275,4 +275,55 @@ describe('preview shell', () => {
       'Preferences cannot be saved',
     );
   });
+  it('searches all preview tracks after a playlist selection and reports actual artist counts', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('v0.1.0 / windows');
+    await user.click(
+      screen.getByRole('button', { name: /Soft machinery.*Static Gardens/ }),
+    );
+    expect(screen.getByText('1 synthetic artist')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Search/ }));
+    await user.type(screen.getByRole('searchbox'), '  SIGNAL  ');
+    expect(
+      screen.getByRole('button', { name: /Signal at dawn.*Glass Meridian/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('1 synthetic artist')).toBeInTheDocument();
+    await user.clear(screen.getByRole('searchbox'));
+    expect(screen.getByText('12 tracks')).toBeInTheDocument();
+    expect(screen.getByText('3 synthetic artists')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Library/ }));
+    expect(
+      screen.getByRole('heading', { name: 'Soft machinery' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('4 tracks')).toBeInTheDocument();
+  });
+
+  it('serialises rapid preference changes and recovers after a failed write', async () => {
+    const user = userEvent.setup();
+    let rejectFirst!: (error: Error) => void;
+    vi.mocked(savePreferences).mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+    );
+    render(<App />);
+    await screen.findByText('v0.1.0 / windows');
+    await user.click(screen.getByRole('button', { name: /Settings/ }));
+    await user.selectOptions(screen.getByRole('combobox'), '125');
+    await user.click(screen.getByRole('checkbox'));
+    await user.selectOptions(screen.getByRole('combobox'), '150');
+    expect(savePreferences).toHaveBeenCalledTimes(1);
+    await act(async () => rejectFirst(new Error('synthetic storage failure')));
+    await waitFor(() => expect(savePreferences).toHaveBeenCalledTimes(3));
+    expect(
+      vi.mocked(savePreferences).mock.calls.map(([value]) => value),
+    ).toEqual([
+      { scale: 125, comfortable: false, volume: 70 },
+      { scale: 125, comfortable: true, volume: 70 },
+      { scale: 150, comfortable: true, volume: 70 },
+    ]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

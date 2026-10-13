@@ -1,5 +1,72 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+const MAX_PREFERENCES_BYTES: u64 = 4096;
+static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
+
+// Exclusive creation never follows or truncates a pre-existing file or symlink.
+// Keep temporary files in the destination directory for an atomic rename.
+struct TemporaryPreferences(PathBuf);
+
+impl TemporaryPreferences {
+    fn create(directory: &Path) -> std::io::Result<(Self, File)> {
+        for _ in 0..128 {
+            let path = directory.join(format!(
+                "preferences-{}-{}.tmp",
+                std::process::id(),
+                NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
+            ));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => return Ok((Self(path), file)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "Temporary preferences unavailable",
+        ))
+    }
+}
+
+impl Drop for TemporaryPreferences {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn read_preferences(path: &Path) -> std::io::Result<Vec<u8>> {
+    // Reject links and special files before opening, including FIFOs that could
+    // otherwise block startup. Recheck the opened handle before reading.
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid preferences file",
+        ));
+    }
+    let file = File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid preferences file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_PREFERENCES_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PREFERENCES_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Preferences file too large",
+        ));
+    }
+    Ok(bytes)
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -45,7 +112,7 @@ impl Store {
             store.error = Some(Self::write_error());
             return store;
         }
-        match fs::read(store.directory.join("preferences.json")) {
+        match read_preferences(&store.directory.join("preferences.json")) {
             Ok(bytes) => match serde_json::from_slice::<Preferences>(&bytes) {
                 Ok(value) if value.validate().is_ok() => store.preferences = value,
                 _ => store.error = Some("Preferences could not be read. Choose your settings again to replace the invalid file.".into()),
@@ -53,12 +120,9 @@ impl Store {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
             Err(_) => store.error = Some("Preferences could not be read. Check access to the settings folder.".into()),
         }
-        // Verify actual writing on first launch; permissions metadata is insufficient.
-        if store.error.is_none() {
-            let value = store.preferences.clone();
-            if let Err(error) = store.save(value) {
-                store.error = Some(error);
-            }
+        // Probe writability without rewriting valid settings on every launch.
+        if store.error.is_none() && store.check_writable().is_err() {
+            store.error = Some(Self::write_error());
         }
         store
     }
@@ -67,14 +131,24 @@ impl Store {
         "Preferences cannot be saved. On Windows, extract Melora to a writable folder so it can create data beside Melora.exe. On Linux or macOS, check access to the application data folder.".into()
     }
 
+    fn check_writable(&self) -> std::io::Result<()> {
+        let (_temporary, mut file) = TemporaryPreferences::create(&self.directory)?;
+        file.write_all(b"{}")?;
+        file.sync_all()
+    }
+
     pub fn save(&mut self, value: Preferences) -> Result<Preferences, String> {
         value.validate()?;
         fs::create_dir_all(&self.directory).map_err(|_| Self::write_error())?;
         let bytes =
             serde_json::to_vec_pretty(&value).map_err(|_| "Preferences could not be encoded.")?;
-        let temporary = self.directory.join("preferences.tmp");
-        fs::write(&temporary, bytes).map_err(|_| Self::write_error())?;
-        fs::rename(&temporary, self.directory.join("preferences.json"))
+        let (temporary, mut file) =
+            TemporaryPreferences::create(&self.directory).map_err(|_| Self::write_error())?;
+        file.write_all(&bytes).map_err(|_| Self::write_error())?;
+        file.sync_all().map_err(|_| Self::write_error())?;
+        // Close before replacing the destination, including on Windows.
+        drop(file);
+        fs::rename(&temporary.0, self.directory.join("preferences.json"))
             .map_err(|_| Self::write_error())?;
         self.preferences = value.clone();
         self.error = None;
@@ -141,6 +215,93 @@ mod tests {
             fs::read_to_string(path.join("preferences.json")).unwrap(),
             "invalid"
         );
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn opening_valid_preferences_does_not_rewrite_them() {
+        let path = temp_path("unchanged");
+        fs::create_dir_all(&path).unwrap();
+        let bytes = br#"{"scale":125,"comfortable":false,"volume":20}"#;
+        fs::write(path.join("preferences.json"), bytes).unwrap();
+        let store = Store::open(path.clone());
+        assert!(store.error.is_none());
+        assert_eq!(store.preferences.scale, 125);
+        assert_eq!(fs::read(path.join("preferences.json")).unwrap(), bytes);
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn oversized_settings_are_preserved_and_can_be_replaced_explicitly() {
+        let path = temp_path("large");
+        fs::create_dir_all(&path).unwrap();
+        let bytes = vec![b' '; MAX_PREFERENCES_BYTES as usize + 1];
+        fs::write(path.join("preferences.json"), &bytes).unwrap();
+        let mut store = Store::open(path.clone());
+        assert!(store.error.is_some());
+        assert_eq!(fs::read(path.join("preferences.json")).unwrap(), bytes);
+        store.save(Preferences::default()).unwrap();
+        assert!(Store::open(path.clone()).error.is_none());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn failed_replacement_preserves_memory_and_removes_temporary_file() {
+        let path = temp_path("replace-failure");
+        let mut store = Store::open(path.clone());
+        fs::create_dir(path.join("preferences.json")).unwrap();
+        let next = Preferences {
+            volume: 25,
+            ..Preferences::default()
+        };
+        assert!(store.save(next).is_err());
+        assert_eq!(store.preferences, Preferences::default());
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planted_temporary_symlinks_never_overwrite_their_target() {
+        let path = temp_path("symlink");
+        fs::create_dir_all(&path).unwrap();
+        let target = path.join("untouched.txt");
+        fs::write(&target, b"synthetic sentinel").unwrap();
+        std::os::unix::fs::symlink(&target, path.join("preferences.tmp")).unwrap();
+        let first = NEXT_TEMPORARY.load(Ordering::Relaxed);
+        for sequence in first..first + 256 {
+            std::os::unix::fs::symlink(
+                &target,
+                path.join(format!(
+                    "preferences-{}-{}.tmp",
+                    std::process::id(),
+                    sequence
+                )),
+            )
+            .unwrap();
+        }
+        let mut store = Store::open(path.clone());
+        let _ = store.save(Preferences::default());
+        assert_eq!(fs::read(&target).unwrap(), b"synthetic sentinel");
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn linked_settings_are_not_read_and_explicit_save_replaces_only_the_link() {
+        let path = temp_path("linked-settings");
+        fs::create_dir_all(&path).unwrap();
+        let target = path.join("untouched.json");
+        let bytes = br#"{"scale":200,"comfortable":true,"volume":20}"#;
+        fs::write(&target, bytes).unwrap();
+        std::os::unix::fs::symlink(&target, path.join("preferences.json")).unwrap();
+        let mut store = Store::open(path.clone());
+        assert!(store.error.is_some());
+        assert_eq!(store.preferences, Preferences::default());
+        store.save(Preferences::default()).unwrap();
+        assert_eq!(fs::read(target).unwrap(), bytes);
+        assert!(!fs::symlink_metadata(path.join("preferences.json"))
+            .unwrap()
+            .is_symlink());
         fs::remove_dir_all(path).unwrap();
     }
 }

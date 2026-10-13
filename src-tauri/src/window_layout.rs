@@ -110,6 +110,7 @@ mod tests {
                 (PREFERRED.width, PREFERRED.height)
             );
             assert!(!window.visible);
+            assert!(!window.create);
             assert!(window.resizable);
             assert_eq!(window.decorations, macos);
             if macos {

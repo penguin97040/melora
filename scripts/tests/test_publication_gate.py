@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -83,3 +82,53 @@ class PublicationTests(unittest.TestCase):
     def test_hook_destination_and_malformed_input(self):
         self.assertNotEqual(self.gate('--hook', 'other', 'https://github.com/fixture/melora.git', input='').returncode, 0)
         self.assertNotEqual(self.gate('--hook', 'origin', 'https://github.com/fixture/melora.git', input='broken').returncode, 0)
+
+    def test_sensitive_filename_is_blocked_without_disclosure(self):
+        secret = 'ghp_' + 'F' * 36
+        (self.root / (secret + '.txt')).write_text('synthetic data')
+        result = self.gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertIn('redacted path', result.stderr)
+
+    def test_additional_push_destination_is_blocked(self):
+        self.run_git('config', '--add', 'remote.origin.pushurl', 'https://github.com/fixture/melora.git')
+        self.run_git('config', '--add', 'remote.origin.pushurl', 'https://github.com/fixture/other.git')
+        self.assertNotEqual(self.gate().returncode, 0)
+
+    def test_invalid_approval_types_fail_closed_without_traceback(self):
+        approval = self.root / '.git/melora-publication.json'
+        for data in [[], {'remote': [], 'name': 'fixture', 'email': 1}]:
+            approval.write_text(json.dumps(data))
+            result = self.gate()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('Traceback', result.stderr)
+
+    def test_hook_rejects_invalid_object_ids_including_deletions(self):
+        destination = 'https://github.com/fixture/melora.git'
+        for value in ['0', 'HEAD', 'HEAD~1', 'Z' * 40]:
+            line = f'refs/heads/main {value} refs/heads/main {"0" * 40}\n'
+            self.assertNotEqual(self.gate('--hook', 'origin', destination, input=line).returncode, 0)
+
+    def test_extra_commit_metadata_is_scanned(self):
+        (self.root / 'example.txt').write_text('synthetic data')
+        self.run_git('add', '.')
+        self.run_git('commit', '-qm', 'Add fixture')
+        raw = self.run_git('cat-file', 'commit', 'HEAD').stdout
+        secret = 'ghp_' + 'M' * 36
+        headers, body = raw.split(b'\n\n', 1)
+        commit = headers + b'\nencoding ' + secret.encode() + b'\n\n' + body
+        oid = self.run_git('hash-object', '-t', 'commit', '-w', '--stdin', input=commit).stdout.strip()
+        self.run_git('update-ref', 'refs/heads/main', oid.decode())
+        self.run_git('symbolic-ref', 'HEAD', 'refs/heads/main')
+        result = self.gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_standard_retina_icon_filename_still_scans_contents(self):
+        icon = self.root / 'src-tauri/icons' / ('128x128' + '@' + '2x.png')
+        icon.parent.mkdir(parents=True)
+        icon.write_text('Synthetic icon fixture')
+        self.assertEqual(self.gate().returncode, 0)
+        icon.write_text('ghp_' + 'I' * 36)
+        self.assertNotEqual(self.gate().returncode, 0)

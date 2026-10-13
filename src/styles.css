@@ -88,7 +88,8 @@ p {
   container-name: shell;
   position: relative;
   overflow: clip;
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -118,6 +119,8 @@ p {
   flex-shrink: 0;
 }
 .workspace {
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   display: grid;
   grid-template-columns: minmax(12rem, 17%) minmax(0, 1fr) minmax(15rem, 23%);
@@ -151,7 +154,8 @@ p {
 .sidebar {
   border-right: 1px solid var(--border);
   display: grid;
-  grid-template-rows: minmax(14rem, 1fr) minmax(28rem, 2fr);
+  grid-template-rows: minmax(12rem, 1fr) minmax(0, 2fr);
+  overflow-y: auto;
 }
 .nav-item {
   width: 100%;
@@ -680,21 +684,9 @@ select {
 }
 
 /* Keep status and player panes visible while long content scrolls independently. */
-.app {
-  height: 100dvh;
-  min-height: 0;
-}
 .masthead,
 .status-strip {
   flex-shrink: 0;
-}
-.workspace {
-  min-height: 0;
-  grid-template-rows: minmax(0, 1fr);
-}
-.sidebar {
-  grid-template-rows: minmax(12rem, 1fr) minmax(0, 2fr);
-  overflow-y: auto;
 }
 .playlists {
   min-height: 0;

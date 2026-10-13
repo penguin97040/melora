@@ -196,4 +196,39 @@ describe('integrated window header', () => {
       ),
     );
   });
+  it('reads the initial maximise state even when resize subscription fails', async () => {
+    vi.mocked(onWindowResize).mockRejectedValue(
+      new Error('synthetic subscription failure'),
+    );
+    vi.mocked(isWindowMaximised).mockResolvedValue(true);
+    const onError = vi.fn();
+    const { container } = render(
+      <WindowHeader chrome="custom" onError={onError} />,
+    );
+    await screen.findByRole('button', { name: 'Restore window' });
+    expect(container.querySelectorAll('.resize-target')).toHaveLength(0);
+    expect(onError).toHaveBeenCalledWith(
+      'Window changes could not be monitored.',
+    );
+  });
+
+  it('ignores failures from obsolete maximise queries', async () => {
+    const onError = vi.fn();
+    render(<WindowHeader chrome="custom" onError={onError} />);
+    await waitFor(() => expect(isWindowMaximised).toHaveBeenCalled());
+    let rejectOld!: (error: Error) => void;
+    vi.mocked(isWindowMaximised).mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectOld = reject;
+      }),
+    );
+    await act(async () => resize());
+    vi.mocked(isWindowMaximised).mockResolvedValue(true);
+    await act(async () => resize());
+    await act(async () => rejectOld(new Error('synthetic stale failure')));
+    expect(onError).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: 'Restore window' }),
+    ).toBeInTheDocument();
+  });
 });

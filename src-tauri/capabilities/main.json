@@ -6,6 +6,10 @@
     "main"
   ],
   "permissions": [
+    "allow-window-chrome",
+    "allow-app-info",
+    "allow-save-preferences",
+    "allow-show-main-window",
     "core:window:allow-minimize",
     "core:window:allow-close",
     "core:window:allow-toggle-maximize",

@@ -74,3 +74,12 @@ if missing:
     (output / 'missing-original-notices.json').write_text(json.dumps(missing, indent=2) + '\n')
     raise SystemExit('Missing original runtime notices; review artifacts/dependency-notices/missing-original-notices.json')
 print(f'Collected original notices and declared licences for {len(report)} runtime dependencies.')
+
+# Packaging must use this exact inventory, never a fresh recursive allowlist.
+files = {}
+for file in sorted(output.rglob('*')):
+    if file.is_symlink():
+        raise SystemExit('Dependency notices must not contain symlinks')
+    if file.is_file():
+        files[file.relative_to(output).as_posix()] = hashlib.sha256(file.read_bytes()).hexdigest()
+Path('artifacts/dependency-notices-manifest.json').write_text(json.dumps(files, indent=2) + '\n')

@@ -44,7 +44,8 @@ export function WindowHeader({
         const value = await isWindowMaximised();
         if (active && request === revision) setMaximised(value);
       } catch {
-        if (active) onError('The window state could not be read.');
+        if (active && request === revision)
+          onError('The window state could not be read.');
       }
     }
     // Subscribe before querying so a native resize cannot fall into a startup gap.
@@ -57,7 +58,10 @@ export function WindowHeader({
         }
       })
       .catch(() => {
-        if (active) onError('Window changes could not be monitored.');
+        if (active) {
+          onError('Window changes could not be monitored.');
+          void sync();
+        }
       });
     return () => {
       active = false;
