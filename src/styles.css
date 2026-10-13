@@ -356,6 +356,22 @@ p {
   border-left: 1px solid var(--border);
   background: var(--background);
   container-type: size;
+  display: flex;
+  flex-direction: column;
+}
+.player > .panel-label,
+.player-body {
+  flex-shrink: 0;
+}
+.player-artwork {
+  /* Use the remaining height before resorting to the pane's normal scrolling. */
+  flex: 0 1 auto;
+  aspect-ratio: 1;
+  min-height: 6rem;
+  container-type: size;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
 }
 .player-body {
   --player-gap: clamp(0.65rem, 1.7cqh, 1rem);
@@ -364,22 +380,16 @@ p {
   top: 0;
 }
 .cover {
-  width: 100%;
+  width: min(100%, 100cqh);
   aspect-ratio: 1;
+  flex-shrink: 0;
+  container-type: inline-size;
   position: relative;
   overflow: hidden;
   margin: 0;
   background:
-    repeating-linear-gradient(
-      0deg,
-      transparent 0 23px,
-      var(--border) 23px 24px
-    ),
-    repeating-linear-gradient(
-      90deg,
-      transparent 0 23px,
-      var(--border) 23px 24px
-    ),
+    repeating-linear-gradient(0deg, transparent 0 7%, var(--border) 7% 7.25%),
+    repeating-linear-gradient(90deg, transparent 0 7%, var(--border) 7% 7.25%),
     linear-gradient(135deg, var(--surface-raised), var(--background));
   display: grid;
   place-items: center;
@@ -403,14 +413,14 @@ p {
 .cover-mark {
   color: var(--cyan);
   font-family: var(--font-heading);
-  font-size: 4rem;
+  font-size: min(4rem, 19.3cqw);
   z-index: 1;
 }
 .cover-caption {
   position: absolute;
-  bottom: 0.6rem;
-  left: 0.6rem;
-  font-size: 0.75rem;
+  bottom: min(0.6rem, 2.9cqw);
+  left: min(0.6rem, 2.9cqw);
+  font-size: min(0.75rem, 3.625cqw);
   letter-spacing: 0.04em;
   color: var(--muted);
 }
@@ -650,6 +660,13 @@ select {
   }
   .player-body {
     position: static;
+  }
+  .player-artwork {
+    flex: none;
+    container-type: inline-size;
+  }
+  .cover {
+    width: 100%;
   }
 }
 @media (prefers-reduced-motion: reduce) {

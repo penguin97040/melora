@@ -105,13 +105,42 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 const player = document.querySelector('.player');
                 const cover = document.querySelector('.cover');
                 const box = cover.getBoundingClientRect();
+                const pane = player.getBoundingClientRect();
                 const label = player.querySelector('.panel-label').getBoundingClientRect();
+                const area = player.querySelector('.player-artwork').getBoundingClientRect();
+                const details = player.querySelector('.player-body').getBoundingClientRect();
+                const stacked = getComputedStyle(player).containerType === 'normal';
+                const minimum = parseFloat(getComputedStyle(document.documentElement).fontSize) * 6;
+                const room = player.clientHeight - label.height - details.height;
+                const decorationInside = ['.cover-mark', '.cover-caption'].every(selector => {
+                    const b = cover.querySelector(selector).getBoundingClientRect();
+                    return b.left >= box.left && b.right <= box.right &&
+                        b.top >= box.top && b.bottom <= box.bottom;
+                });
                 return {width: box.width, height: box.height, playerWidth: player.clientWidth,
-                    gap: box.top - label.bottom, border: getComputedStyle(cover).borderTopWidth};
+                    playerHeight: player.clientHeight, playerScrollHeight: player.scrollHeight,
+                    centred: Math.abs(box.left + box.width / 2 -
+                        (pane.left + player.clientLeft + player.clientWidth / 2)) <= 1,
+                    gap: box.top - label.bottom, border: getComputedStyle(cover).borderTopWidth,
+                    areaHeight: area.height, minimum, room, stacked, decorationInside,
+                    expectedSize: stacked ? player.clientWidth :
+                        Math.min(player.clientWidth, Math.max(minimum, room))};
             """)
-        artwork = artwork_geometry()
-        assert abs(artwork['width'] - artwork['playerWidth']) <= 1 and abs(artwork['width'] - artwork['height']) <= 1, f'Artwork not full-width square: {artwork}'
-        assert artwork['gap'] == 0 and artwork['border'] == '0px', f'Artwork has gutter or border: {artwork}'
+        def check_artwork():
+            artwork = artwork_geometry()
+            assert abs(artwork['width'] - artwork['height']) <= 1, f'Artwork not square: {artwork}'
+            assert artwork['centred'] and artwork['width'] <= artwork['playerWidth'] + 1, f'Artwork not centred/bounded: {artwork}'
+            assert abs(artwork['height'] - artwork['expectedSize']) <= 2, f'Artwork not using available height: {artwork}'
+            assert artwork['gap'] == 0 and artwork['border'] == '0px', f'Artwork has gutter or border: {artwork}'
+            assert artwork['decorationInside'], f'Synthetic decoration outside artwork: {artwork}'
+            if not artwork['stacked']:
+                assert artwork['height'] >= artwork['minimum'] - 1, f'Artwork below minimum: {artwork}'
+                if artwork['room'] >= artwork['minimum']:
+                    assert artwork['playerScrollHeight'] <= artwork['playerHeight'] + 1, f'Player scrolls while content fits: {artwork}'
+                else:
+                    assert artwork['playerScrollHeight'] > artwork['playerHeight'], f'Fallback scrolling missing: {artwork}'
+            return artwork
+        artwork = check_artwork()
         assert execute("return document.querySelector('.masthead').getBoundingClientRect().height === 36;"), 'Header not 36 logical pixels'
         assert execute("return document.querySelector('.app').classList.contains('chrome-custom') && document.querySelectorAll('.window-controls button:not(:disabled)').length === 3 && document.querySelectorAll('.resize-target').length === 8;"), 'Native chrome not ready'
         assert execute("return document.querySelector('button[aria-label=Play]').disabled;")
@@ -205,6 +234,36 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             (output / 'chrome-acceptance.json').write_text(json.dumps({'environment':'Linux X11 Openbox under Xvfb; no real desktop or Wayland', 'controls':'native minimise/maximise/restore/close passed', 'header':'native drag and double click passed', 'resize_edges':resize_results, 'windows_macos':'unavailable'},indent=2)+'\n')
             print('Native Linux/Openbox chrome passed: controls, keyboard minimise, drag/double-click, all resize edges/corners.')
             sys.exit(0)
+        # Resizing must shrink the square before overflow, then restore its width cap.
+        height_sequence = []
+        def fixed_player_sizes():
+            return execute("""
+                return ['.track-title', '.artist-name', '.player-footnote', '.transport button'].map(selector => {
+                    const e = document.querySelector(selector), css = getComputedStyle(e);
+                    return {font: css.fontSize, height: selector.includes('button') ? e.clientHeight : null};
+                });
+            """)
+        fixed_sizes = fixed_player_sizes()
+        for height in [940, 700, 600, 520, 600, 700, 940]:
+            call('POST', '/window/rect', {'width': 1440, 'height': height})
+            height_sequence.append({'windowHeight': height, **check_artwork()})
+            assert fixed_player_sizes() == fixed_sizes, 'Text or controls scaled with artwork'
+            (output / f'melora-linux-artwork-height-{height}.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+        assert height_sequence[1]['height'] < height_sequence[0]['height'], 'Shorter pane did not shrink artwork'
+        assert height_sequence[1]['playerScrollHeight'] <= height_sequence[1]['playerHeight'] + 1, 'Artwork did not shrink before scrolling'
+        assert height_sequence[3]['height'] == height_sequence[3]['minimum'], 'Fallback did not retain 6rem artwork'
+        assert height_sequence[3]['playerScrollHeight'] > height_sequence[3]['playerHeight'], 'Small-window fallback not exercised'
+        assert height_sequence[-1]['height'] == height_sequence[0]['height'], 'Artwork did not recover after increasing height'
+        # Synthetic text stress checks intrinsic wrapping without changing production preview data.
+        call('POST', '/window/rect', {'width': 1440, 'height': 700})
+        original_title = execute("return document.querySelector('.track-title').textContent;")
+        execute("document.querySelector('.track-title').textContent = 'Synthetic wrapping title for a quiet evening with exceptionally long words';")
+        wrapping = check_artwork()
+        assert wrapping['height'] < height_sequence[1]['height'], 'Wrapped text did not receive artwork space'
+        assert fixed_player_sizes() == fixed_sizes, 'Wrapping changed text/control sizes'
+        (output / 'melora-linux-artwork-wrapping.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+        execute("document.querySelector('.track-title').textContent = arguments[0];", original_title)
+        call('POST', '/window/rect', {'width': 1440, 'height': 940})
         # Actual keyboard events, rather than a click simulation.
         def key(value):
             call('POST', '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': [
@@ -215,8 +274,8 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 const box = document.activeElement.getBoundingClientRect();
                 const player = document.querySelector('.player').getBoundingClientRect();
                 return box.left - 3 >= player.left && box.right + 3 <= player.right &&
-                    box.top - 3 >= document.querySelector('.masthead').getBoundingClientRect().bottom &&
-                    box.bottom + 3 <= document.querySelector('.status-strip').getBoundingClientRect().top;
+                    box.top - 3 >= Math.max(player.top, document.querySelector('.masthead').getBoundingClientRect().bottom) &&
+                    box.bottom + 3 <= Math.min(player.bottom, document.querySelector('.status-strip').getBoundingClientRect().top);
             """), 'Focused mode control obscured'
         execute("document.querySelector('.transport button').focus();")
         key(' ')
@@ -260,8 +319,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             assert execute('return document.documentElement.scrollWidth <= innerWidth;'), f'Horizontal overflow at {width}px/{scale}%'
             assert execute("return document.querySelector('.status-strip').getBoundingClientRect().bottom <= innerHeight + 1;"), 'Status strip outside viewport'
             assert execute("return document.querySelector('.mode-status').textContent === 'Shuffle: On · Repeat: Song';"), 'Modes lost during navigation'
-            artwork = artwork_geometry()
-            assert abs(artwork['width'] - artwork['playerWidth']) <= 1 and abs(artwork['width'] - artwork['height']) <= 1, f'Artwork lost proportions: {artwork}'
+            artwork = check_artwork()
             geometry.append(execute("""
                 const player = document.querySelector('.player');
                 const cover = document.querySelector('.cover');
@@ -289,6 +347,13 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                     buttons.every((box, i) => !i || Math.abs(box.width - buttons[0].width) < 1 && box.left >= buttons[i-1].right);
             """), 'Five controls clipped, overlapping or uneven'
             (output / f'melora-linux-{width}-{height}-{scale}-percent-controls.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+            execute("document.querySelector('.player-footnote').scrollIntoView({block: 'end'});")
+            assert execute("""
+                const note = document.querySelector('.player-footnote').getBoundingClientRect();
+                return note.top >= document.querySelector('.masthead').getBoundingClientRect().bottom &&
+                    note.bottom <= document.querySelector('.status-strip').getBoundingClientRect().top;
+            """), 'Fallback scrolling cannot expose full player details'
+            assert execute('return scrollY === 0;'), 'Player scrolling moved the whole document'
             execute("document.querySelectorAll('.nav-item')[2].click();")
             wait_script("return !!document.querySelector('select');")
         assert execute("return document.querySelector('main').clientHeight > 180;"), 'Content pane collapsed at 200% scale'
@@ -323,7 +388,8 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             'brand_icon': 'loaded', 'artwork_geometry': artwork, 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
             'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar',
             'preview_modes': 'keyboard toggle/cycle, navigation retention and relaunch reset passed',
-            'player_geometry': geometry,
+            'player_geometry': geometry, 'artwork_height_sequence': height_sequence,
+            'artwork_wrapping': wrapping,
             'os_dpi_changes': 'not tested; scale/decorations arithmetic unit-tested',
             'text_contrast_minimum': min(pair['ratio'] for pair in contrast),
             'stream_quality': 'unavailable, no fabricated bitrate',
