@@ -368,6 +368,9 @@ export default function App() {
           <span className="status-dot" />
           Synthetic preview
         </span>
+        <span className="playback-device">
+          Playback device: <span>No device connected</span>
+        </span>
         <span className="stream-quality">Stream quality: unavailable</span>
         <span role="status">
           {info

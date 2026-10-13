@@ -504,13 +504,20 @@ input[type='range'] {
 .transport .play-button {
   border: 1px solid var(--border);
 }
-.device {
-  padding-top: var(--player-gap);
-  border-top: 1px solid var(--border);
+.player-device-spacer {
+  /* Reserve the former label/status lines, gap and divider height. */
+  padding-top: calc(var(--player-gap) + 1px);
   font-size: 0.8125rem;
 }
-.device .eyebrow {
+.player-device-spacer::before,
+.player-device-spacer::after {
+  content: '';
   display: block;
+  height: 1lh;
+}
+.player-device-spacer::before {
+  font-size: 0.75rem;
+  margin-bottom: 0.75rem;
 }
 .player-footnote {
   color: var(--muted);
@@ -528,6 +535,13 @@ input[type='range'] {
   font-size: 0.75rem;
   color: var(--cyan);
   background: var(--background);
+}
+.status-strip > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.playback-device > span {
+  color: var(--muted);
 }
 .stream-quality {
   margin-left: auto;

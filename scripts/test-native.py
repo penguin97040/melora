@@ -121,6 +121,38 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             sys.exit(0)
         assert opening_size == {'width': 1440, 'height': 940}, 'Preferred opening client size not applied'
         assert execute("return document.querySelector('.player').scrollHeight <= document.querySelector('.player').clientHeight + 1;"), 'Preferred player requires scrolling'
+        def check_device_footer():
+            result = execute("""
+                const footer = document.querySelector('.status-strip');
+                const device = footer.querySelector('.playback-device');
+                const spacer = document.querySelector('.player-device-spacer');
+                const bounds = footer.getBoundingClientRect();
+                const range = document.createRange();
+                const textVisible = [...footer.children].every(item => {
+                    range.selectNodeContents(item);
+                    return [...range.getClientRects()].every(box =>
+                        box.left >= bounds.left && box.right <= bounds.right &&
+                        box.top >= bounds.top && box.bottom <= bounds.bottom);
+                });
+                const css = getComputedStyle(spacer);
+                const scale = parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
+                return {textVisible, footerHeight: bounds.height,
+                    ordered: footer.children[0].textContent.includes('Synthetic preview') &&
+                        footer.children[1] === device && footer.children[2].className === 'stream-quality',
+                    status: device.textContent.trim().replace(/\\s+/g, ' '),
+                    spacerHeight: spacer.getBoundingClientRect().height,
+                    minimumSpace: 40 * scale + parseFloat(css.paddingTop),
+                    blank: spacer.textContent === '' && spacer.children.length === 0 &&
+                        spacer.getAttribute('aria-hidden') === 'true' && spacer.tabIndex === -1 &&
+                        css.borderTopWidth === '0px',
+                    playerDeviceAbsent: !document.querySelector('.player').textContent.includes('No device connected')};
+            """)
+            assert result['ordered'] and result['status'] == 'Playback device: No device connected', 'Device status misplaced or changed'
+            assert result['textVisible'], f'Footer text clipped: {result}'
+            assert result['blank'] and result['playerDeviceAbsent'], 'Former device area is not blank/non-interactive'
+            assert result['spacerHeight'] >= result['minimumSpace'] - 1, f'Former device space collapsed: {result}'
+            return result
+        device_footer = check_device_footer()
         (output / 'melora-linux-preferred.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         def artwork_geometry():
             return execute("""
@@ -163,6 +195,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                     assert artwork['playerScrollHeight'] > artwork['playerHeight'], f'Fallback scrolling missing: {artwork}'
             return artwork
         artwork = check_artwork()
+        assert abs(artwork['height'] - 330.1875) <= 1, 'Device move changed preferred artwork sizing'
         assert execute("return document.querySelector('.masthead').getBoundingClientRect().height === 36;"), 'Header not 36 logical pixels'
         assert execute("return document.querySelector('.app').classList.contains('chrome-custom') && document.querySelectorAll('.window-controls button:not(:disabled)').length === 3 && document.querySelectorAll('.resize-target').length === 8;"), 'Native chrome not ready'
         assert execute("return document.querySelector('button[aria-label=Play]').disabled;")
@@ -342,6 +375,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             assert execute("return document.querySelector('.status-strip').getBoundingClientRect().bottom <= innerHeight + 1;"), 'Status strip outside viewport'
             assert execute("return document.querySelector('.mode-status').textContent === 'Shuffle: On · Repeat: Song';"), 'Modes lost during navigation'
             artwork = check_artwork()
+            check_device_footer()
             geometry.append(execute("""
                 const player = document.querySelector('.player');
                 const cover = document.querySelector('.cover');
@@ -407,6 +441,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             'platform': 'linux', 'ipc': 'passed', 'keyboard_selection': 'passed',
             'local_fonts': 'passed', 'scaling': '100–200%, 720, 1360 and 1440px',
             'status_strip': 'visible', 'preferences_relaunch': 'passed',
+            'device_footer': device_footer,
             'brand_icon': 'loaded', 'artwork_geometry': artwork, 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
             'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar',
             'preview_modes': 'keyboard toggle/cycle, navigation retention and relaunch reset passed',

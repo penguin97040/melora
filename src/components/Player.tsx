@@ -94,10 +94,7 @@ export function Player({ track }: { track: PreviewTrack }) {
         <p className="mode-status" role="status">
           Shuffle: {shuffle ? 'On' : 'Off'} · Repeat: {repeat}
         </p>
-        <div className="device">
-          <span className="eyebrow">Playback device</span>
-          <p>No device connected</p>
-        </div>
+        <div className="player-device-spacer" aria-hidden="true" />
         <p className="player-footnote" id="preview-modes-note">
           Shuffle and repeat are preview selections only; track order and audio
           are unchanged. Modes reset on relaunch. Spotify sign-in and playback
