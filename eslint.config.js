@@ -34,4 +34,8 @@ export default tseslint.config(
     files: ['*.js', 'scripts/*.mjs'],
     languageOptions: { globals: globals.node },
   },
+  {
+    files: ['ora/sdk-bridge/*.js'],
+    languageOptions: { globals: globals.browser },
+  },
 );
