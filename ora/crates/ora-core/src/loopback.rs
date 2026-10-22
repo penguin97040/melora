@@ -9,7 +9,11 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-const MAX_REQUEST_BYTES: usize = 8 * 1024;
+/// The request line carries everything used (`GET /callback?code=…&state=… HTTP/1.1`).
+const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
+/// Headers are read only to be dropped. Cookies aren't port-scoped, so other local web apps on
+/// 127.0.0.1 can make them large; past this cap the reply is sent anyway.
+const MAX_DRAINED_BYTES: usize = 64 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,21 +160,43 @@ async fn handle(mut stream: TcpStream, state: &Secret, app_name: &str) -> Outcom
     }
 }
 
-/// Reads the request head (capped) and returns the target of a `GET` request line.
+/// Returns the target of a `GET` request line. The cap applies to that line alone, so large
+/// headers never decide whether a callback is accepted; they are drained (up to a cap) so the
+/// reply isn't reset by unread data.
 async fn read_target(stream: &mut TcpStream) -> std::io::Result<Option<String>> {
     let mut head = Vec::with_capacity(1024);
     let mut buffer = [0u8; 1024];
-    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+    let line_end = loop {
+        if let Some(end) = head.windows(2).position(|w| w == b"\r\n") {
+            break end;
+        }
+        if head.len() > MAX_REQUEST_LINE_BYTES {
+            return Ok(None);
+        }
         let read = stream.read(&mut buffer).await?;
-        if read == 0 || head.len() + read > MAX_REQUEST_BYTES {
+        if read == 0 {
             return Ok(None);
         }
         head.extend_from_slice(&buffer[..read]);
-    }
-    let Some(line) = head.split(|&b| b == b'\r').next() else {
-        return Ok(None);
     };
-    let line = String::from_utf8_lossy(line);
+    if line_end > MAX_REQUEST_LINE_BYTES {
+        return Ok(None);
+    }
+    let line = String::from_utf8_lossy(&head[..line_end]).into_owned();
+
+    // Keep only enough of the rest to spot the blank line that ends the head.
+    let mut drained = head.len();
+    let mut tail = head.split_off(line_end);
+    while !tail.windows(4).any(|w| w == b"\r\n\r\n") && drained < MAX_DRAINED_BYTES {
+        let read = match stream.read(&mut buffer).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        drained += read;
+        tail.drain(..tail.len().saturating_sub(3));
+        tail.extend_from_slice(&buffer[..read]);
+    }
+
     let mut parts = line.split(' ');
     Ok(match (parts.next(), parts.next(), parts.next()) {
         (Some("GET"), Some(target), Some(version)) if version.starts_with("HTTP/1.") => {
@@ -292,6 +318,40 @@ pub(crate) mod tests {
             .wait(&state, "Melora", Duration::from_millis(50))
             .await;
         assert_eq!(result.err(), Some(CallbackError::TimedOut));
+    }
+
+    #[tokio::test]
+    async fn large_headers_do_not_block_the_callback() {
+        let callback = Callback::bind(0).await.unwrap();
+        let address = callback
+            .redirect_uri()
+            .trim_start_matches("http://")
+            .trim_end_matches("/callback")
+            .to_owned();
+        let state = Secret::new("good-state");
+        // Cookies for 127.0.0.1 from other local apps arrive with the redirect.
+        let cookies = format!("Cookie: other={}\r\n", "c".repeat(20 * 1024));
+        let client = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(address).await.unwrap();
+            stream
+                .write_all(
+                    format!(
+                        "GET /callback?code=abc&state=good-state HTTP/1.1\r\nHost: 127.0.0.1\r\n{cookies}\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            response.lines().next().unwrap_or_default().to_owned()
+        });
+        let code = callback
+            .wait(&state, "Melora", Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(code.expose(), "abc");
+        assert!(client.await.unwrap().contains("200"));
     }
 
     #[tokio::test]
