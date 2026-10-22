@@ -56,6 +56,20 @@ class PublicationTests(unittest.TestCase):
                 self.assertNotIn(value, result.stdout + result.stderr)
                 file.unlink()
 
+    def test_linked_worktree_uses_repository_approval(self):
+        (self.root / 'example.txt').write_text('clean')
+        self.run_git('add', '.')
+        self.run_git('commit', '-qm', 'Clean fixture')
+        linked = tempfile.TemporaryDirectory()
+        self.addCleanup(linked.cleanup)
+        worktree = Path(linked.name) / 'linked'
+        self.run_git('worktree', 'add', '-q', '-b', 'fixture-branch', str(worktree))
+        result = subprocess.run(['python3', str(GATE)], cwd=worktree, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (worktree / 'example.txt').write_text('ghp_' + 'W' * 36)
+        result = subprocess.run(['python3', str(GATE)], cwd=worktree, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_deleted_historical_secret(self):
         secret = 'ghp_' + 'Z' * 36
         (self.root / 'example.txt').write_text(secret)

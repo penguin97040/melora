@@ -75,7 +75,9 @@ def audit_blob(path, data):
 
 
 def policy():
-    cfg = Path(git('rev-parse', '--git-path', 'melora-publication.json').decode().strip())
+    # The approval is repository-wide, so linked worktrees read it from the common Git directory.
+    common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip())
+    cfg = common / 'melora-publication.json'
     try:
         data = json.loads(cfg.read_text())
         if not isinstance(data, dict) or set(data) != {'remote', 'name', 'email'} or not all(isinstance(v, str) and v.strip() for v in data.values()):
