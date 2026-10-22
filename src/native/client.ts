@@ -100,6 +100,12 @@ export async function signOutOfSpotify(): Promise<SpotifyStatus> {
   return invoke<SpotifyStatus>('plugin:ora|sign_out');
 }
 
+/** Loads the profile if it's missing; the status update carries the result too. */
+export async function loadSpotifyProfile(): Promise<Profile | null> {
+  requireDesktop();
+  return invoke<Profile | null>('plugin:ora|profile');
+}
+
 /** Opens an open.spotify.com page in the system browser (validated again in Rust). */
 export async function openInSpotify(url: string): Promise<void> {
   requireDesktop();

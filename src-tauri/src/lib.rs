@@ -135,3 +135,26 @@ pub fn run() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn csp_allows_exactly_the_image_host_the_profile_keeps() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = config["app"]["security"]["csp"].as_str().unwrap();
+        let img_src = csp
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("img-src "))
+            .unwrap();
+        let remote: Vec<&str> = img_src
+            .split_whitespace()
+            .filter(|source| source.starts_with("https://"))
+            .collect();
+        assert_eq!(
+            remote,
+            [format!("https://{}", ora_tauri::core::api::IMAGE_HOST)]
+        );
+    }
+}

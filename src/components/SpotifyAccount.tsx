@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   cancelSpotifySignIn,
   hasNativeStorage,
+  loadSpotifyProfile,
   openInSpotify,
   setSpotifyClientId,
   signInWithSpotify,
@@ -12,6 +13,7 @@ import {
   accountName,
   describeError,
   describeFailure,
+  profileFailed,
 } from '../features/account';
 
 function stateLine(status: SpotifyStatus | null): string {
@@ -27,8 +29,9 @@ function stateLine(status: SpotifyStatus | null): string {
     case 'sessionExpired':
       return 'Your Spotify sign-in has expired. Sign in again.';
     case 'signedIn':
-      return status.auth.profile
-        ? `Signed in as ${accountName(status)}.`
+      if (status.auth.profile) return `Signed in as ${accountName(status)}.`;
+      return profileFailed(status)
+        ? 'Signed in, but your Spotify profile couldn’t be loaded.'
         : 'Signed in. Loading your profile…';
   }
 }
@@ -152,6 +155,15 @@ export function SpotifyAccount({ status }: { status: SpotifyStatus | null }) {
             onClick={() => void run(cancelSpotifySignIn)}
           >
             Cancel sign-in
+          </button>
+        )}
+        {profileFailed(status) && (
+          <button
+            className="action-button"
+            disabled={busy}
+            onClick={() => void run(loadSpotifyProfile)}
+          >
+            Load profile again
           </button>
         )}
         {kind === 'signedIn' && profileUrl && (

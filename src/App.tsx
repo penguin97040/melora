@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Player } from './components/Player';
 import { SpotifyAccount } from './components/SpotifyAccount';
 import { WindowHeader } from './components/WindowHeader';
-import { accountName } from './features/account';
+import { accountName, profileRetryable } from './features/account';
 import {
   defaultPreferences,
   getAppInfo,
   getWindowChrome,
   hasNativeStorage,
+  loadSpotifyProfile,
   openInSpotify,
   savePreferences,
   showMainWindow,
@@ -51,7 +52,8 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [preferencesSettled, setPreferencesSettled] = useState(false);
   const [spotify, setSpotify] = useState<SpotifyStatus | null>(null);
-  const [avatarFailed, setAvatarFailed] = useState(false);
+  // Keyed to the URL, so a new profile or account gets a fresh attempt.
+  const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const revealRequested = useRef(false);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const searchRef = useRef<HTMLInputElement>(null);
@@ -116,6 +118,20 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  const retryProfile = profileRetryable(spotify);
+  useEffect(() => {
+    // After a connection problem, try the profile again when the connection or the user comes
+    // back. These are events, not polling; a refusal or rate limit is never retried by itself.
+    if (!retryProfile) return;
+    const retry = () => void loadSpotifyProfile().catch(() => undefined);
+    window.addEventListener('online', retry);
+    window.addEventListener('focus', retry);
+    return () => {
+      window.removeEventListener('online', retry);
+      window.removeEventListener('focus', retry);
+    };
+  }, [retryProfile]);
 
   useEffect(() => {
     document.documentElement.style.fontSize = `${preferences.scale}%`;
@@ -425,7 +441,7 @@ export default function App() {
         </span>
         {profile && (
           <span className="account-chip">
-            {profile.imageUrl && !avatarFailed && (
+            {profile.imageUrl && profile.imageUrl !== failedAvatar && (
               <img
                 className="avatar"
                 src={profile.imageUrl}
@@ -434,7 +450,7 @@ export default function App() {
                 height={16}
                 loading="lazy"
                 referrerPolicy="no-referrer"
-                onError={() => setAvatarFailed(true)}
+                onError={() => setFailedAvatar(profile.imageUrl)}
               />
             )}
             <span>Spotify: {accountName(spotify)}</span>

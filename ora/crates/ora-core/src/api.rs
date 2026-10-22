@@ -9,6 +9,9 @@ use ora_types::{ForbiddenHint, OraError, Profile};
 use serde::Deserialize;
 
 pub const API_BASE: &str = "https://api.spotify.com/v1";
+/// The only image host a client's CSP allows (`img-src`). Images elsewhere would be blocked, so
+/// they are dropped here instead of failing silently in the UI.
+pub const IMAGE_HOST: &str = "i.scdn.co";
 
 /// A failed call: `Unauthorized` is handled by refreshing once and replaying once.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,7 +104,7 @@ pub async fn me<H: HttpClient>(http: &H, access: &Secret) -> Result<Profile, Api
     let image_url = body
         .images
         .into_iter()
-        .filter(|image| image.url.starts_with("https://"))
+        .filter(|image| is_allowed_image(&image.url))
         .min_by_key(|image| image.width.unwrap_or(u32::MAX))
         .map(|image| image.url);
     let spotify_url = body
@@ -114,6 +117,16 @@ pub async fn me<H: HttpClient>(http: &H, access: &Secret) -> Result<Profile, Api
         display_name: body.display_name.filter(|name| !name.trim().is_empty()),
         image_url,
         spotify_url,
+    })
+}
+
+fn is_allowed_image(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str() == Some(IMAGE_HOST)
+            && url.port().is_none()
+            && url.username().is_empty()
+            && url.password().is_none()
     })
 }
 
@@ -162,6 +175,24 @@ mod tests {
         assert_eq!(profile.display_name, None);
         assert_eq!(profile.image_url, None);
         assert_eq!(profile.spotify_url, None);
+    }
+
+    #[tokio::test]
+    async fn only_images_the_csp_allows_are_kept() {
+        let http = MockHttp::default();
+        http.push(
+            200,
+            r#"{"id":"user1","images":[
+                {"url":"https://platform-lookaside.fbsbx.com/platform/profilepic/x","width":1},
+                {"url":"https://i.scdn.co.example/image/x","width":2},
+                {"url":"https://i.scdn.co:8443/image/x","width":3},
+                {"url":"https://i.scdn.co/image/kept","width":300}]}"#,
+        );
+        let profile = me(&http, &Secret::new("a")).await.unwrap();
+        assert_eq!(
+            profile.image_url.as_deref(),
+            Some("https://i.scdn.co/image/kept")
+        );
     }
 
     #[tokio::test]

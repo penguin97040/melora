@@ -2,8 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpotifyAccount } from './SpotifyAccount';
+import { profileRetryable } from '../features/account';
 import {
   cancelSpotifySignIn,
+  loadSpotifyProfile,
   openInSpotify,
   setSpotifyClientId,
   signInWithSpotify,
@@ -17,6 +19,7 @@ vi.mock('../native/client', () => ({
   signInWithSpotify: vi.fn(),
   cancelSpotifySignIn: vi.fn(),
   signOutOfSpotify: vi.fn(),
+  loadSpotifyProfile: vi.fn(),
   openInSpotify: vi.fn(),
 }));
 
@@ -208,5 +211,64 @@ describe('Spotify account settings', () => {
     expect(
       screen.getByText(/set by the development environment/),
     ).toHaveTextContent('0123…cdef');
+  });
+
+  it('offers to load a profile that failed to load', async () => {
+    vi.mocked(loadSpotifyProfile).mockResolvedValue(profile);
+    const offline = status(
+      { kind: 'signedIn', profile: null, sessionOnly: false },
+      { lastError: { kind: 'offline' } },
+    );
+    render(<SpotifyAccount status={offline} />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Signed in, but your Spotify profile couldn’t be loaded.',
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('can’t be reached');
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Load profile again' }),
+    );
+    expect(loadSpotifyProfile).toHaveBeenCalledOnce();
+  });
+
+  it('shows a profile that is still loading without a retry', () => {
+    render(
+      <SpotifyAccount
+        status={status(
+          { kind: 'signedIn', profile: null, sessionOnly: true },
+          { lastError: { kind: 'storageUnavailable' } },
+        )}
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Signed in. Loading your profile…',
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Load profile again' }),
+    ).toBeNull();
+  });
+
+  it('retries a missing profile by itself only after connection problems', () => {
+    const missing = (lastError: SpotifyStatus['lastError']) =>
+      status(
+        { kind: 'signedIn', profile: null, sessionOnly: false },
+        { lastError },
+      );
+    expect(profileRetryable(missing({ kind: 'offline' }))).toBe(true);
+    expect(profileRetryable(missing({ kind: 'network' }))).toBe(true);
+    expect(
+      profileRetryable(missing({ kind: 'forbidden', hint: 'Allowlist' })),
+    ).toBe(false);
+    expect(
+      profileRetryable(missing({ kind: 'rateLimited', retryAfterS: 5 })),
+    ).toBe(false);
+    expect(profileRetryable(missing(null))).toBe(false);
+    expect(
+      profileRetryable(
+        status(
+          { kind: 'signedIn', profile, sessionOnly: false },
+          { lastError: { kind: 'offline' } },
+        ),
+      ),
+    ).toBe(false);
   });
 });

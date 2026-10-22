@@ -86,6 +86,25 @@ export function describeFailure(
   return 'Something went wrong. Try again.';
 }
 
+/** Signed in, but loading the profile failed; `lastError` says why. */
+export function profileFailed(status: SpotifyStatus | null): boolean {
+  if (status?.auth.kind !== 'signedIn' || status.auth.profile) return false;
+  const kind = status.lastError?.kind;
+  // A failed credential-store save doesn't stop the profile from loading.
+  return (
+    kind !== undefined && kind !== 'cancelled' && kind !== 'storageUnavailable'
+  );
+}
+
+/**
+ * Whether to fetch the missing profile again without being asked: only after a connection
+ * problem, never after Spotify refused or limited the request.
+ */
+export function profileRetryable(status: SpotifyStatus | null): boolean {
+  const kind = status?.lastError?.kind;
+  return profileFailed(status) && (kind === 'offline' || kind === 'network');
+}
+
 export function accountName(status: SpotifyStatus | null): string | null {
   if (status?.auth.kind !== 'signedIn' || !status.auth.profile) return null;
   return status.auth.profile.displayName ?? 'your Spotify account';
