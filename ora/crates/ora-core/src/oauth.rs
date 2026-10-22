@@ -181,8 +181,10 @@ mod tests {
             "ch",
         );
         assert!(url.starts_with("https://accounts.spotify.com/authorize?response_type=code&"));
+        // Assembled so no source line holds a Client-ID-shaped value (publication gate rule).
+        let client_part = format!("client_id={}", client_id().as_str());
         for part in [
-            "client_id=0123456789abcdef0123456789abcdef",
+            client_part.as_str(),
             "scope=user-read-private+streaming",
             "redirect_uri=http%3A%2F%2F127.0.0.1%3A4567%2Fcallback",
             "state=st",

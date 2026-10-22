@@ -12,16 +12,20 @@ from pathlib import Path
 PRIVATE = ('agents.md', 'changelog.md', 'mistakes.md', 'codex_start_here.md',
            'instructions.md', 'spotify_client_build_spec.md', 'start-melora-*.ps1',
            'foobar_ui.png', 'claude.md', 'handoff.md', 'do_next.md', 'user_instructions.md',
-           'spotify_integration.md', '.private-archive', '.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx',
+           'spotify_integration.md', '.private-archive', 'spotify.json','.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx',
            '*.mobileprovision', '*.p8', '*.crt', '*.cer', '*.der', '*.keystore', '*.jks', '*.db', '*.sqlite*', '*.exe', '*.zip')
 OUTPUTS = {'node_modules', 'target', 'dist', 'artifacts', 'data', '.xwin-cache', 'credentials', 'account-data', 'secrets'}
 RULES = {
     'credential': re.compile(r'(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})'),
     'sensitive assignment': re.compile(r'''(?i)(?:client[_ -]?secret|access[_ -]?token|refresh[_ -]?token|api[_ -]?key|secret|token|credential|private[_ -]?key|authori[sz]ation[_ -]?code|password|code[_ -]?verifier|spotify[_ -]?client[_ -]?id)\s*["']?\s*[:=]\s*["']?([A-Za-z0-9_+/.=-]{12,})'''),
+    # A Spotify Client ID is 32 lowercase hex characters, saved by the app as "clientId".
+    'spotify client id': re.compile(r'''(?i)client[_ -]?id\s*["']?\s*[:=]\s*["']?([0-9a-f]{32})(?![0-9a-f])'''),
     'attribution': re.compile(r'(?i)(?:co-' r'authored-by:.*(?:bot|claude|openai|codex|anthropic)|(?:generated|written|authored|created) (?:by|with) (?:AI|ChatGPT|Claude|Codex)|(?:AI|Claude|Codex|ChatGPT) co-author)'),
     'personal email': re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'),
     'personal path': re.compile(r'(?:[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/][^\s/\\]+|' r'/' r'Users/[^\s/]+|' r'/' r'home/(?!runner\b|agent\b)[^\s/]+)'),
 }
+# Sequential test fixtures already in published history; no real Client ID looks like these.
+SYNTHETIC_CLIENT_IDS = {'0123456789abcdef' * 2, 'fedcba9876543210' * 2}
 PLACEHOLDERS = {'YOUR_SPOTIFY_CLIENT_ID', 'YOUR_CLIENT_ID', 'YOUR_API_KEY', 'PLACEHOLDER', 'your_client_id_here'}
 
 class AuditError(Exception):
@@ -51,6 +55,8 @@ def findings(data, location, *, licence=False, email=None):
     for rule, pattern in RULES.items():
         for match in pattern.finditer(value):
             if rule == 'sensitive assignment' and match.group(1) in PLACEHOLDERS:
+                continue
+            if rule == 'spotify client id' and match.group(1).lower() in SYNTHETIC_CLIENT_IDS:
                 continue
             if rule == 'personal email' and (licence or match.group() == email):
                 continue
