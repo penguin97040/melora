@@ -11,6 +11,7 @@ import {
   subscribePlayback,
 } from './native/client';
 import type { AppInfo } from './native/client';
+import { playbackStatus } from './native/playbackFixture';
 
 vi.mock('./native/client', () => ({
   defaultPreferences: { scale: 100, comfortable: false, volume: 70 },
@@ -28,19 +29,10 @@ vi.mock('./native/client', () => ({
       redirectUri: 'http://127.0.0.1:43821/callback',
     }),
   ),
-  subscribePlayback: vi.fn(async (onStatus: (status: unknown) => void) =>
-    onStatus({
-      tier: 'off',
-      nowPlaying: null,
-      paused: true,
-      positionMs: 0,
-      durationMs: 0,
-      updatedAtMs: 0,
-      issue: null,
-      probe: null,
-      cspBlocks: [],
-    }),
-  ),
+  subscribePlayback: vi.fn(async (onStatus: (status: unknown) => void) => {
+    const { playbackStatus } = await import('./native/playbackFixture');
+    onStatus(playbackStatus());
+  }),
   openInSpotify: vi.fn(),
   setSpotifyClientId: vi.fn(),
   signInWithSpotify: vi.fn(),
@@ -364,17 +356,7 @@ describe('preview shell', () => {
 describe('playback device footer', () => {
   it('names this app only while Melora is the active Spotify device', async () => {
     vi.mocked(subscribePlayback).mockImplementationOnce(async (onStatus) =>
-      onStatus({
-        tier: 'active',
-        nowPlaying: null,
-        paused: false,
-        positionMs: 0,
-        durationMs: 0,
-        updatedAtMs: 0,
-        issue: null,
-        probe: null,
-        cspBlocks: [],
-      }),
+      onStatus(playbackStatus({ tier: 'active', paused: false })),
     );
     render(<App />);
     expect(await screen.findByText('This app')).toBeInTheDocument();

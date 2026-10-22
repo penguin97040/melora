@@ -514,10 +514,57 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         engine_probe = playback_review[5]
         assert not execute("return [...document.scripts].some(s => s.src.startsWith('https://sdk.scdn.co/'));"), 'SDK script loaded during the test'
         assert check_device_footer()['status'] == 'Playback device: No device connected', 'Footer claims a device'
+        # Live player (brought forward from Phase 5): synthetic SDK reports through the real
+        # sdk_event command, at the preferred size and 100%. No Spotify contact, no artwork fetch.
+        call('POST', '/window/rect', {'width': 1440, 'height': 940})
+        execute("const el=document.querySelector('select');el.value='100';el.dispatchEvent(new Event('change',{bubbles:true}));")
+        wait_script("return document.documentElement.style.fontSize === '100%';")
+        execute("""
+            window.__liveReady = false;
+            const invoke = window.__TAURI_INTERNALS__.invoke;
+            const report = (event) => invoke('plugin:ora|sdk_event', {event});
+            const id = 'AbCd0123456789' + 'xyzXYZ01';
+            report({type: 'probe', probe: {secure: true, widevine: true, playready: false, fairplay: false,
+                    userAgent: 'native test', platformVersion: null, webviewVersion: null}})
+                .then(() => report({type: 'ready', deviceId: 'nativetest1'}))
+                .then(() => report({type: 'state', state: {paused: false, positionMs: 30000, durationMs: 200000,
+                    track: {uri: 'spotify:track:' + id, name: 'Native test track', artists: ['Test Artist'],
+                            album: 'Test Album', imageUrl: null},
+                    shuffle: false, repeat: 'off',
+                    disallows: {pause: false, resume: false, next: true, previous: false, seek: false}}}))
+                .then(() => { window.__liveReady = true; });
+        """)
+        wait_script("return window.__liveReady && !!document.querySelector('.player[aria-label=\"Player\"]');")
+        live_player = execute("""
+            const player = document.querySelector('.player');
+            const button = (name) => [...player.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === name);
+            return {title: player.querySelector('.track-title').textContent,
+                pauseEnabled: !button('Pause').disabled, nextDisabled: button('Next track').disabled,
+                previousEnabled: !button('Previous track').disabled,
+                seekEnabled: !player.querySelector('#seek').disabled,
+                openInSpotify: [...player.querySelectorAll('button')].some(b => b.textContent === 'Open in Spotify'),
+                noSynthetic: !player.textContent.toLowerCase().includes('synthetic'),
+                plainArtwork: !!player.querySelector('.cover-art[aria-label="No artwork"]') && !player.querySelector('.cover'),
+                fits: player.scrollHeight <= player.clientHeight + 1,
+                device: document.querySelector('.playback-device').textContent.trim().replace(/\\s+/g, ' ')};
+        """)
+        assert live_player == {'title': 'Native test track', 'pauseEnabled': True, 'nextDisabled': True,
+                               'previousEnabled': True, 'seekEnabled': True, 'openInSpotify': True,
+                               'noSynthetic': True, 'plainArtwork': True, 'fits': True,
+                               'device': 'Playback device: This app'}, f'Live player wrong: {live_player}'
+        (output / 'melora-linux-live-player.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+        execute("""
+            window.__liveDone = false;
+            window.__TAURI_INTERNALS__.invoke('plugin:ora|sdk_event', {event: {type: 'state', state: null}})
+                .then(() => { window.__liveDone = true; });
+        """)
+        wait_script("return window.__liveDone && !!document.querySelector('.player[aria-label=\"Player preview\"]');")
+        assert check_device_footer()['status'] == 'Playback device: No device connected', 'Footer kept a device after playback moved away'
         execute("document.querySelector('.playback-test').scrollIntoView({block: 'start'});")
         (output / 'melora-linux-settings-playback.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         (output / 'native-acceptance.json').write_text(json.dumps({
             'embedded_playback': 'signed-out refusals (access_token, play_here, playback_command), malformed report refused, probe accepted, no SDK script, test block shown',
+            'live_player': 'synthetic SDK reports: real track, disallowed Next disabled, Open in Spotify, plain artwork, fits at 1440x940/100%, footer This app, preview restored',
             'engine_drm_probe': {key: engine_probe[key] for key in ('secure', 'widevine', 'playready', 'fairplay')},
             'spotify_account': 'plugin status, invalid Client ID and URL rejection, masked save and Settings screenshots passed; sign-in not run',
             'platform': 'linux', 'ipc': 'passed', 'keyboard_selection': 'passed',

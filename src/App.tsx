@@ -12,6 +12,7 @@ import {
   loadSpotifyProfile,
   openInSpotify,
   savePreferences,
+  sendPlaybackCommand,
   showMainWindow,
   subscribePlayback,
   subscribeSpotify,
@@ -19,10 +20,12 @@ import {
 import type {
   AppInfo,
   PlaybackStatus,
+  PlayerCommand,
   Preferences,
   SpotifyStatus,
   WindowChrome,
 } from './native/client';
+import { describeFailure } from './features/account';
 import { previewPlaylists, previewTracks } from './preview';
 
 function connectionLabel(status: SpotifyStatus | null): string {
@@ -175,6 +178,20 @@ export default function App() {
   useEffect(() => {
     if (view === 'Search') searchRef.current?.focus();
   }, [view]);
+
+  const deviceReady = playback?.tier === 'ready' || playback?.tier === 'active';
+
+  function playerCommand(command: PlayerCommand): void {
+    void sendPlaybackCommand(command).catch((error: unknown) =>
+      setWindowMessage(describeFailure(error)),
+    );
+  }
+
+  function openSpotifyPage(url: string): void {
+    void openInSpotify(url).catch(() =>
+      setWindowMessage('Your browser could not be opened. Try again.'),
+    );
+  }
 
   function updatePreferences(next: Preferences): void {
     setPreferences(next);
@@ -332,7 +349,7 @@ export default function App() {
               </label>
               <label className="setting-row" htmlFor="volume">
                 <span>
-                  Preferred volume <small>(for future playback)</small>
+                  Volume <small>(Melora’s playback volume)</small>
                 </span>
                 <span>{preferences.volume}%</span>
               </label>
@@ -343,12 +360,12 @@ export default function App() {
                 max="100"
                 value={preferences.volume}
                 disabled={!ready}
-                onChange={(e) =>
-                  updatePreferences({
-                    ...preferences,
-                    volume: Number(e.target.value),
-                  })
-                }
+                onChange={(e) => {
+                  const volume = Number(e.target.value);
+                  updatePreferences({ ...preferences, volume });
+                  if (deviceReady)
+                    playerCommand({ op: 'setVolume', volume: volume / 100 });
+                }}
               />
               <p className="settings-note">
                 {hasNativeStorage()
@@ -458,7 +475,12 @@ export default function App() {
             </>
           )}
         </main>
-        <Player track={selected} />
+        <Player
+          track={selected}
+          playback={playback}
+          onCommand={playerCommand}
+          onOpenInSpotify={openSpotifyPage}
+        />
       </div>
       <footer className="status-strip">
         <span>

@@ -9,9 +9,9 @@ import {
   allowPlayback,
   enablePlayback,
   playHere,
-  sendPlaybackCommand,
 } from '../native/client';
-import type { PlaybackStatus, SpotifyStatus } from '../native/client';
+import { playbackStatus as playback } from '../native/playbackFixture';
+import type { SpotifyStatus } from '../native/client';
 import type { Feature } from '../native/bindings/Feature';
 
 vi.mock('../native/client', () => ({
@@ -20,8 +20,6 @@ vi.mock('../native/client', () => ({
   allowPlayback: vi.fn(),
   enablePlayback: vi.fn(),
   playHere: vi.fn(),
-  sendPlaybackCommand: vi.fn(),
-  openInSpotify: vi.fn(),
 }));
 
 function spotify(granted: Feature[]): SpotifyStatus {
@@ -31,21 +29,6 @@ function spotify(granted: Feature[]): SpotifyStatus {
     clientIdHint: null,
     lastError: null,
     redirectUri: 'http://127.0.0.1:43821/callback',
-  };
-}
-
-function playback(extra: Partial<PlaybackStatus> = {}): PlaybackStatus {
-  return {
-    tier: 'off',
-    nowPlaying: null,
-    paused: true,
-    positionMs: 0,
-    durationMs: 0,
-    updatedAtMs: 0,
-    issue: null,
-    probe: null,
-    cspBlocks: [],
-    ...extra,
   };
 }
 
@@ -115,8 +98,7 @@ describe('Playback in Melora (test)', () => {
     expect(playHere).toHaveBeenCalledWith('https://open.spotify.com/album/x');
   });
 
-  it('shows what is playing and sends controls through Rust', async () => {
-    vi.mocked(sendPlaybackCommand).mockResolvedValue();
+  it('shows what is playing and points to the player for controls', () => {
     render(
       <PlaybackTest
         spotify={spotify(allowed)}
@@ -130,6 +112,7 @@ describe('Playback in Melora (test)', () => {
             artists: ['Artist'],
             album: 'Album',
             spotifyUrl: 'https://open.spotify.com/track/x',
+            imageUrl: null,
           },
         })}
         volume={70}
@@ -138,13 +121,12 @@ describe('Playback in Melora (test)', () => {
     expect(screen.getByText(/Song — Artist \(Album\)/)).toHaveTextContent(
       '0:20 / 3:00',
     );
-    await userEvent.click(screen.getByRole('button', { name: 'Play' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Back 15 s' }));
-    expect(sendPlaybackCommand).toHaveBeenCalledWith({ op: 'togglePlay' });
-    expect(sendPlaybackCommand).toHaveBeenCalledWith({
-      op: 'seek',
-      positionMs: 5_000,
-    });
+    expect(
+      screen.getByText(/appear in the player on the right/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Play' }),
+    ).not.toBeInTheDocument();
   });
 
   it('explains an unsupported engine and SDK errors', () => {

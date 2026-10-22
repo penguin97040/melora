@@ -1,7 +1,201 @@
 import { useState } from 'react';
 import type { PreviewTrack } from '../preview';
+import type { PlaybackStatus, PlayerCommand } from '../native/client';
+import type { RepeatMode } from '../native/bindings/RepeatMode';
+import { formatTime } from '../features/playback';
+import { usePlaybackPosition } from '../features/usePlaybackPosition';
+import {
+  NextIcon,
+  PauseIcon,
+  PlayIcon,
+  PreviousIcon,
+  RepeatIcon,
+  ShuffleIcon,
+} from './playerIcons';
 
-export function Player({ track }: { track: PreviewTrack }) {
+const repeatLabel: Record<RepeatMode, 'Off' | 'All' | 'Song'> = {
+  off: 'Off',
+  context: 'All',
+  track: 'Song',
+};
+const nextRepeat: Record<RepeatMode, RepeatMode> = {
+  off: 'context',
+  context: 'track',
+  track: 'off',
+};
+
+export function Player({
+  track,
+  playback,
+  onCommand,
+  onOpenInSpotify,
+}: {
+  track: PreviewTrack;
+  playback: PlaybackStatus | null;
+  onCommand: (command: PlayerCommand) => void;
+  onOpenInSpotify: (url: string) => void;
+}) {
+  // While Melora is the active Spotify device, the panel shows the real item and controls.
+  // Otherwise it stays the labelled synthetic preview.
+  if (playback?.tier === 'active') {
+    return (
+      <LivePlayer
+        playback={playback}
+        onCommand={onCommand}
+        onOpenInSpotify={onOpenInSpotify}
+      />
+    );
+  }
+  return <PreviewPlayer track={track} />;
+}
+
+function LivePlayer({
+  playback,
+  onCommand,
+  onOpenInSpotify,
+}: {
+  playback: PlaybackStatus;
+  onCommand: (command: PlayerCommand) => void;
+  onOpenInSpotify: (url: string) => void;
+}) {
+  const position = usePlaybackPosition(playback);
+  // The slider's value while it's being dragged; the seek is sent on release only.
+  const [dragging, setDragging] = useState<number | null>(null);
+  const { nowPlaying, paused, disallows } = playback;
+  const repeat = repeatLabel[playback.repeat];
+  const shown = dragging ?? position;
+  const playDisabled = paused ? disallows.resume : disallows.pause;
+  const spotifyUrl = nowPlaying?.spotifyUrl;
+
+  function commitSeek(): void {
+    if (dragging === null) return;
+    onCommand({ op: 'seek', positionMs: dragging });
+    setDragging(null);
+  }
+
+  return (
+    <aside className="player panel" aria-label="Player">
+      <div className="panel-label">
+        <span>Now playing</span>
+        <span>Spotify</span>
+      </div>
+      <div className="player-artwork">
+        {nowPlaying?.imageUrl ? (
+          <img
+            className="cover-art"
+            src={nowPlaying.imageUrl}
+            alt={`Artwork for ${nowPlaying.album || nowPlaying.name}`}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <div
+            className="cover-art cover-missing"
+            role="img"
+            aria-label="No artwork"
+          />
+        )}
+      </div>
+      <div className="player-body">
+        <p className="eyebrow">
+          {paused ? 'Paused in Melora' : 'Playing in Melora'}
+        </p>
+        <h2 className="track-title">{nowPlaying?.name ?? 'Spotify'}</h2>
+        <p className="artist-name">{nowPlaying?.artists.join(', ')}</p>
+        <p className="muted">{nowPlaying?.album}</p>
+        <div className="playback-notice">
+          <span className="status-dot" />
+          From Spotify
+          {spotifyUrl && (
+            <>
+              {' · '}
+              <button
+                className="link-button"
+                onClick={() => onOpenInSpotify(spotifyUrl)}
+              >
+                Open in Spotify
+              </button>
+            </>
+          )}
+        </div>
+        <label className="sr-only" htmlFor="seek">
+          Track position
+        </label>
+        <input
+          id="seek"
+          type="range"
+          min="0"
+          max={playback.durationMs}
+          step="1000"
+          value={Math.min(shown, playback.durationMs)}
+          disabled={disallows.seek || playback.durationMs === 0}
+          onChange={(event) => setDragging(Number(event.target.value))}
+          onPointerUp={commitSeek}
+          onKeyUp={commitSeek}
+          onBlur={commitSeek}
+        />
+        <div className="time-labels">
+          <span>{formatTime(shown)}</span>
+          <span>{formatTime(playback.durationMs)}</span>
+        </div>
+        <div className="transport" role="group" aria-label="Player controls">
+          <button
+            className={playback.shuffle ? 'mode-active' : ''}
+            aria-label={`Shuffle: ${playback.shuffle ? 'On' : 'Off'}`}
+            aria-pressed={playback.shuffle}
+            onClick={() =>
+              onCommand({ op: 'setShuffle', state: !playback.shuffle })
+            }
+          >
+            <ShuffleIcon />
+          </button>
+          <button
+            aria-label="Previous track"
+            disabled={disallows.previous}
+            onClick={() => onCommand({ op: 'previous' })}
+          >
+            <PreviousIcon />
+          </button>
+          <button
+            className="play-button"
+            aria-label={paused ? 'Play' : 'Pause'}
+            disabled={playDisabled}
+            onClick={() => onCommand({ op: 'togglePlay' })}
+          >
+            {paused ? <PlayIcon /> : <PauseIcon />}
+          </button>
+          <button
+            aria-label="Next track"
+            disabled={disallows.next}
+            onClick={() => onCommand({ op: 'next' })}
+          >
+            <NextIcon />
+          </button>
+          <button
+            className={repeat !== 'Off' ? 'mode-active' : ''}
+            aria-label={`Repeat: ${repeat}`}
+            aria-pressed={repeat !== 'Off'}
+            onClick={() =>
+              onCommand({ op: 'setRepeat', mode: nextRepeat[playback.repeat] })
+            }
+          >
+            <RepeatIcon one={repeat === 'Song'} />
+          </button>
+        </div>
+        <p className="mode-status" role="status">
+          Shuffle: {playback.shuffle ? 'On' : 'Off'} · Repeat: {repeat}
+        </p>
+        <div className="player-device-spacer" aria-hidden="true" />
+        <p className="player-footnote">
+          Playing through Spotify in Melora. Track details and artwork come from
+          Spotify.
+        </p>
+      </div>
+    </aside>
+  );
+}
+
+function PreviewPlayer({ track }: { track: PreviewTrack }) {
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<'Off' | 'All' | 'Song'>('Off');
 
@@ -51,24 +245,16 @@ export function Player({ track }: { track: PreviewTrack }) {
             aria-describedby="preview-modes-note"
             onClick={() => setShuffle((current) => !current)}
           >
-            <svg className="mode-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 6h3c5 0 7 12 12 12h3m-4-4 4 4-4 4M3 18h3c2 0 3-2 4-4m4-4c1-2 2-4 4-4h3m-4-4 4 4-4 4" />
-            </svg>
+            <ShuffleIcon />
           </button>
           <button disabled aria-label="Previous track">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 5h3v14H5zM19 5v14L8 12z" />
-            </svg>
+            <PreviousIcon />
           </button>
           <button disabled className="play-button" aria-label="Play">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 4v16l13-8z" />
-            </svg>
+            <PlayIcon />
           </button>
           <button disabled aria-label="Next track">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M16 5h3v14h-3zM5 5v14l11-7z" />
-            </svg>
+            <NextIcon />
           </button>
           <button
             className={repeat !== 'Off' ? 'mode-active' : ''}
@@ -81,14 +267,7 @@ export function Player({ track }: { track: PreviewTrack }) {
               )
             }
           >
-            <svg className="mode-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 10V8a3 3 0 0 1 3-3h13m-4-4 4 4-4 4M20 14v2a3 3 0 0 1-3 3H4m4-4-4 4 4 4" />
-            </svg>
-            {repeat === 'Song' && (
-              <span className="repeat-one" aria-hidden="true">
-                1
-              </span>
-            )}
+            <RepeatIcon one={repeat === 'Song'} />
           </button>
         </div>
         <p className="mode-status" role="status">
@@ -97,8 +276,8 @@ export function Player({ track }: { track: PreviewTrack }) {
         <div className="player-device-spacer" aria-hidden="true" />
         <p className="player-footnote" id="preview-modes-note">
           Shuffle and repeat are preview selections only; track order and audio
-          are unchanged. Modes reset on relaunch. Spotify sign-in and playback
-          arrive in later milestones. These tracks and artwork are synthetic.
+          are unchanged. Modes reset on relaunch. Real playback shows here once
+          enabled in Settings. These tracks and artwork are synthetic.
         </p>
       </div>
     </aside>
