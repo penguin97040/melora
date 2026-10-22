@@ -12,6 +12,22 @@ tauri-build = { version = "=2.7.2", features = [] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 ts-rs = "=12.0.1"
+tauri-plugin = { version = "=2.6.2", features = ["build"] }
+tokio = { version = "=1.53.2", features = ["net", "time", "sync", "io-util", "rt", "macros"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider", "http2", "json", "form", "system-proxy"] }
+# reqwest's default rustls provider is aws-lc-rs, whose C build is unproven for the MSVC cross
+# build; ring is installed explicitly at startup instead.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+url = "=2.5.8"
+getrandom = "=0.4.3"
+sha2 = "=0.11.1"
+base64 = "=0.23.1"
+zeroize = "=1.8.2"
+open = "=5.4.4"
+keyring-core = "=1.0.1"
+windows-native-keyring-store = { version = "=1.1.0", default-features = false }
+apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
+zbus-secret-service-keyring-store = { version = "=1.0.1", features = ["crypto-rust"] }
 
 [profile.release]
 codegen-units = 1

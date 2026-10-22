@@ -78,26 +78,30 @@ fn show_main_window(
         })
 }
 
-fn settings_directory(_app: &tauri::App) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+// Preferences and the Spotify Client ID (`spotify.json`) share this folder.
+fn settings_directory(_app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let exe = std::env::current_exe()?;
-        Ok(exe
-            .parent()
-            .ok_or("Cannot locate the portable application folder.")?
-            .join("data"))
+        Some(std::env::current_exe().ok()?.parent()?.join("data"))
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Ok(_app.path().app_data_dir()?)
+        _app.path().app_data_dir().ok()
     }
 }
 
 pub fn run() {
     let result = tauri::Builder::default()
-        .plugin(ora_tauri::init())
+        .plugin(ora_tauri::init(ora_tauri::OraConfig {
+            service: "app.melora.desktop",
+            app_name: "Melora",
+            client_id_variable: "MELORA_SPOTIFY_CLIENT_ID",
+            settings_dir: settings_directory,
+        }))
         .setup(|app| {
-            app.manage(Mutex::new(Store::open(settings_directory(app)?)));
+            let directory = settings_directory(app.handle())
+                .ok_or("Cannot locate the portable application folder.")?;
+            app.manage(Mutex::new(Store::open(directory)));
             app.manage(Mutex::new(window_layout::StartupWindow::default()));
             let config = app
                 .config()

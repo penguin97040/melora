@@ -2,7 +2,19 @@
 //! Web API client, playback and feature availability. Each client wires this in through its own
 //! shell (`ora-tauri` for Tauri apps).
 
+pub mod api;
+pub mod browser;
+pub mod config;
+pub mod http;
+pub mod loopback;
+pub mod oauth;
+pub mod pkce;
+pub mod secret;
+pub mod session;
+pub mod store;
+
 pub use ora_types as types;
+pub use session::{Options, Ora};
 
 use ora_types::Feature;
 

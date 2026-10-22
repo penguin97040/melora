@@ -5,7 +5,12 @@ description = "Tauri 2 plugin exposing ora-core to a client's main window"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
+links = "tauri-plugin-ora"
 
 [dependencies]
 ora-core = { path = "../ora-core" }
 tauri = { workspace = true }
+serde = { workspace = true }
+
+[build-dependencies]
+tauri-plugin = { workspace = true }
