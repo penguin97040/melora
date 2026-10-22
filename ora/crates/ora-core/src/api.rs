@@ -6,7 +6,9 @@ use crate::{
     link::SpotifyUri,
     secret::Secret,
 };
-use ora_types::{ForbiddenHint, OraError, Profile, RepeatMode};
+use ora_types::{
+    DeviceKind, Disallows, ForbiddenHint, OraError, Profile, RepeatMode, SdkState, SdkTrack,
+};
 use serde::Deserialize;
 
 pub const API_BASE: &str = "https://api.spotify.com/v1";
@@ -138,9 +140,19 @@ async fn player_put<H: HttpClient>(
     url: String,
     body: Option<serde_json::Value>,
 ) -> Result<(), ApiError> {
+    player_send(http, access, Method::Put, url, body).await
+}
+
+async fn player_send<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    method: Method,
+    url: String,
+    body: Option<serde_json::Value>,
+) -> Result<(), ApiError> {
     let response = http
         .send(Request {
-            method: Method::Put,
+            method,
             url,
             bearer: Some(access.clone()),
             form: Vec::new(),
@@ -215,6 +227,324 @@ pub async fn repeat<H: HttpClient>(
         encode(device_id)
     );
     player_put(http, access, url, None).await
+}
+
+/// `PUT /me/player/pause?device_id=…`.
+pub async fn pause<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+) -> Result<(), ApiError> {
+    let url = format!("{API_BASE}/me/player/pause?device_id={}", encode(device_id));
+    player_put(http, access, url, None).await
+}
+
+/// `PUT /me/player/play?device_id=…` with no body: carries on with the current item.
+pub async fn resume<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+) -> Result<(), ApiError> {
+    let url = format!("{API_BASE}/me/player/play?device_id={}", encode(device_id));
+    player_put(http, access, url, None).await
+}
+
+/// `PUT /me/player/seek?position_ms=…&device_id=…`.
+pub async fn seek<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    position_ms: u64,
+) -> Result<(), ApiError> {
+    let url = format!(
+        "{API_BASE}/me/player/seek?position_ms={position_ms}&device_id={}",
+        encode(device_id)
+    );
+    player_put(http, access, url, None).await
+}
+
+/// `PUT /me/player/volume?volume_percent=…&device_id=…`.
+pub async fn volume<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    percent: u8,
+) -> Result<(), ApiError> {
+    let url = format!(
+        "{API_BASE}/me/player/volume?volume_percent={}&device_id={}",
+        percent.min(100),
+        encode(device_id)
+    );
+    player_put(http, access, url, None).await
+}
+
+/// `POST /me/player/next?device_id=…` (no body).
+pub async fn next<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+) -> Result<(), ApiError> {
+    let url = format!("{API_BASE}/me/player/next?device_id={}", encode(device_id));
+    player_send(http, access, Method::Post, url, None).await
+}
+
+/// `POST /me/player/previous?device_id=…` (no body).
+pub async fn previous<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+) -> Result<(), ApiError> {
+    let url = format!(
+        "{API_BASE}/me/player/previous?device_id={}",
+        encode(device_id)
+    );
+    player_send(http, access, Method::Post, url, None).await
+}
+
+/// A Spotify Connect device as the Web API reports it. The ID never leaves `ora-core`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiDevice {
+    pub id: String,
+    pub name: String,
+    pub kind: DeviceKind,
+    pub active: bool,
+    pub restricted: bool,
+    pub supports_volume: bool,
+    pub volume_percent: Option<u8>,
+}
+
+/// `GET /me/player`: the active device and what it plays, in the SDK's state shape so both
+/// sources are validated the same way.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayerState {
+    pub device: ApiDevice,
+    pub state: SdkState,
+}
+
+#[derive(Deserialize)]
+struct DevicesBody {
+    #[serde(default)]
+    devices: Vec<DeviceBody>,
+}
+
+#[derive(Deserialize)]
+struct DeviceBody {
+    id: Option<String>,
+    #[serde(default)]
+    is_active: bool,
+    #[serde(default)]
+    is_restricted: bool,
+    name: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    volume_percent: Option<u32>,
+    #[serde(default)]
+    supports_volume: bool,
+}
+
+#[derive(Deserialize)]
+struct PlayerBody {
+    device: Option<DeviceBody>,
+    #[serde(default)]
+    is_playing: bool,
+    progress_ms: Option<u64>,
+    #[serde(default)]
+    shuffle_state: bool,
+    repeat_state: Option<String>,
+    item: Option<ItemBody>,
+    actions: Option<ActionsBody>,
+}
+
+/// The reference describes `actions` as the disallows object itself, while replies nest it in
+/// `actions.disallows`; both are read.
+#[derive(Deserialize)]
+struct ActionsBody {
+    disallows: Option<DisallowsBody>,
+    #[serde(flatten)]
+    direct: DisallowsBody,
+}
+
+#[derive(Default, Deserialize)]
+struct DisallowsBody {
+    #[serde(default)]
+    pausing: bool,
+    #[serde(default)]
+    resuming: bool,
+    #[serde(default)]
+    seeking: bool,
+    #[serde(default)]
+    skipping_next: bool,
+    #[serde(default)]
+    skipping_prev: bool,
+}
+
+/// A track (`album`, `artists`) or an episode (`show`, `images`).
+#[derive(Deserialize)]
+struct ItemBody {
+    uri: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    duration_ms: u64,
+    #[serde(default)]
+    artists: Vec<NamedBody>,
+    album: Option<NamedBody>,
+    show: Option<NamedBody>,
+    #[serde(default)]
+    images: Vec<ImageBody>,
+}
+
+#[derive(Deserialize)]
+struct NamedBody {
+    name: Option<String>,
+    #[serde(default)]
+    images: Vec<ImageBody>,
+}
+
+fn device_kind(kind: &str) -> DeviceKind {
+    match kind.to_ascii_lowercase().as_str() {
+        "computer" => DeviceKind::Computer,
+        "smartphone" => DeviceKind::Smartphone,
+        "tablet" => DeviceKind::Tablet,
+        "speaker" | "avr" | "audiodongle" | "castaudio" => DeviceKind::Speaker,
+        "tv" | "stb" | "castvideo" => DeviceKind::Tv,
+        "gameconsole" => DeviceKind::GameConsole,
+        "automobile" => DeviceKind::Automobile,
+        _ => DeviceKind::Other,
+    }
+}
+
+/// Connect device IDs are letters and digits; a device without a usable ID can't be chosen.
+fn device(body: DeviceBody) -> Option<ApiDevice> {
+    let id = body.id.filter(|id| {
+        (1..=128).contains(&id.len())
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    })?;
+    Some(ApiDevice {
+        id,
+        name: body.name.unwrap_or_default(),
+        kind: device_kind(body.kind.as_deref().unwrap_or_default()),
+        active: body.is_active,
+        restricted: body.is_restricted,
+        supports_volume: body.supports_volume,
+        volume_percent: body.volume_percent.map(|v| v.min(100) as u8),
+    })
+}
+
+/// The image closest to 300 px wide, from the allowed image host only.
+fn pick_image(images: Vec<ImageBody>) -> Option<String> {
+    images
+        .into_iter()
+        .filter(|image| is_allowed_image(&image.url))
+        .min_by_key(|image| image.width.map_or(u32::MAX, |w| w.abs_diff(300)))
+        .map(|image| image.url)
+}
+
+fn track(item: ItemBody) -> Option<SdkTrack> {
+    let uri = item.uri?;
+    let (artists, album, images) = match (item.album, item.show) {
+        (Some(album), _) => (
+            item.artists.into_iter().filter_map(|a| a.name).collect(),
+            album.name.unwrap_or_default(),
+            album.images,
+        ),
+        (None, Some(show)) => (
+            show.name.into_iter().collect(),
+            String::new(),
+            if item.images.is_empty() {
+                show.images
+            } else {
+                item.images
+            },
+        ),
+        (None, None) => (Vec::new(), String::new(), item.images),
+    };
+    Some(SdkTrack {
+        uri,
+        name: item.name.unwrap_or_default(),
+        artists,
+        album,
+        image_url: pick_image(images),
+    })
+}
+
+async fn player_get<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    url: String,
+) -> Result<Response, ApiError> {
+    let response = http
+        .send(Request {
+            method: Method::Get,
+            url,
+            bearer: Some(access.clone()),
+            form: Vec::new(),
+            json: None,
+        })
+        .await
+        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    if matches!(response.status, 200 | 204) {
+        Ok(response)
+    } else {
+        Err(player_error(&response))
+    }
+}
+
+/// `GET /me/player/devices`. Devices without a usable ID are left out.
+pub async fn devices<H: HttpClient>(http: &H, access: &Secret) -> Result<Vec<ApiDevice>, ApiError> {
+    let response = player_get(http, access, format!("{API_BASE}/me/player/devices")).await?;
+    if response.body.is_empty() {
+        return Ok(Vec::new());
+    }
+    let body: DevicesBody =
+        serde_json::from_slice(&response.body).map_err(|_| ApiError::Other(OraError::Network))?;
+    Ok(body.devices.into_iter().filter_map(device).collect())
+}
+
+/// `GET /me/player?additional_types=episode`. `None` when no device is active (204).
+pub async fn player_state<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+) -> Result<Option<PlayerState>, ApiError> {
+    let url = format!("{API_BASE}/me/player?additional_types=episode");
+    let response = player_get(http, access, url).await?;
+    if response.status == 204 || response.body.is_empty() {
+        return Ok(None);
+    }
+    let body: PlayerBody =
+        serde_json::from_slice(&response.body).map_err(|_| ApiError::Other(OraError::Network))?;
+    let Some(device) = body.device.and_then(device) else {
+        return Ok(None);
+    };
+    let disallows = body.actions.map_or_else(Disallows::default, |actions| {
+        let nested = actions.disallows.unwrap_or_default();
+        let direct = actions.direct;
+        Disallows {
+            pause: nested.pausing || direct.pausing,
+            resume: nested.resuming || direct.resuming,
+            next: nested.skipping_next || direct.skipping_next,
+            previous: nested.skipping_prev || direct.skipping_prev,
+            seek: nested.seeking || direct.seeking,
+        }
+    });
+    let duration_ms = body.item.as_ref().map_or(0, |item| item.duration_ms);
+    Ok(Some(PlayerState {
+        device,
+        state: SdkState {
+            paused: !body.is_playing,
+            position_ms: body.progress_ms.unwrap_or(0),
+            duration_ms,
+            track: body.item.and_then(track),
+            shuffle: body.shuffle_state,
+            repeat: match body.repeat_state.as_deref() {
+                Some("track") => RepeatMode::Track,
+                Some("context") => RepeatMode::Context,
+                _ => RepeatMode::Off,
+            },
+            disallows,
+        },
+    }))
 }
 
 fn encode(value: &str) -> String {
@@ -353,6 +683,152 @@ mod tests {
         assert!(seen
             .iter()
             .all(|r| r.method == Method::Put && r.json.is_none() && r.form.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn remote_controls_send_the_documented_requests() {
+        let http = MockHttp::default();
+        for _ in 0..6 {
+            http.push(204, "");
+        }
+        let access = Secret::new("a");
+        pause(&http, &access, "d1").await.unwrap();
+        resume(&http, &access, "d1").await.unwrap();
+        seek(&http, &access, "d1", 61_000).await.unwrap();
+        volume(&http, &access, "d1", 250).await.unwrap();
+        next(&http, &access, "d1").await.unwrap();
+        previous(&http, &access, "d1").await.unwrap();
+        let seen = http.requests();
+        let shape: Vec<(Method, &str)> = seen.iter().map(|r| (r.method, r.url.as_str())).collect();
+        assert_eq!(
+            shape,
+            [
+                (
+                    Method::Put,
+                    "https://api.spotify.com/v1/me/player/pause?device_id=d1"
+                ),
+                (
+                    Method::Put,
+                    "https://api.spotify.com/v1/me/player/play?device_id=d1"
+                ),
+                (
+                    Method::Put,
+                    "https://api.spotify.com/v1/me/player/seek?position_ms=61000&device_id=d1"
+                ),
+                (
+                    Method::Put,
+                    "https://api.spotify.com/v1/me/player/volume?volume_percent=100&device_id=d1"
+                ),
+                (
+                    Method::Post,
+                    "https://api.spotify.com/v1/me/player/next?device_id=d1"
+                ),
+                (
+                    Method::Post,
+                    "https://api.spotify.com/v1/me/player/previous?device_id=d1"
+                ),
+            ]
+        );
+        assert!(seen
+            .iter()
+            .all(|r| r.had_bearer && r.json.is_none() && r.form.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn devices_without_a_usable_id_are_left_out() {
+        let http = MockHttp::default();
+        http.push(
+            200,
+            r#"{"devices":[
+                {"id":"abc123","is_active":true,"is_restricted":false,"name":"Kitchen",
+                 "type":"Speaker","volume_percent":140,"supports_volume":true},
+                {"id":null,"name":"Ghost","type":"Computer"},
+                {"id":"bad id","name":"Space","type":"Computer"},
+                {"id":"def456","is_restricted":true,"name":null,"type":"CastVideo"},
+                {"id":"ghi789","name":"Car","type":"SomethingNew","volume_percent":null}
+            ]}"#,
+        );
+        let list = devices(&http, &Secret::new("a")).await.unwrap();
+        assert_eq!(
+            list.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["abc123", "def456", "ghi789"]
+        );
+        assert_eq!(list[0].kind, DeviceKind::Speaker);
+        assert!(list[0].active && list[0].supports_volume);
+        assert_eq!(list[0].volume_percent, Some(100));
+        assert!(list[1].restricted);
+        assert_eq!(list[1].kind, DeviceKind::Tv);
+        assert_eq!(list[1].name, "");
+        assert_eq!(list[2].kind, DeviceKind::Other);
+        assert_eq!(list[2].volume_percent, None);
+        assert_eq!(
+            http.requests()[0].url,
+            "https://api.spotify.com/v1/me/player/devices"
+        );
+    }
+
+    #[tokio::test]
+    async fn playback_state_reads_tracks_episodes_and_nothing_playing() {
+        let http = MockHttp::default();
+        http.push(
+            200,
+            r#"{"device":{"id":"abc123","is_active":true,"name":"Phone","type":"Smartphone",
+                 "supports_volume":false,"volume_percent":null},
+               "is_playing":true,"progress_ms":5000,"shuffle_state":true,"repeat_state":"track",
+               "actions":{"disallows":{"seeking":true,"skipping_prev":true}},
+               "item":{"type":"track","uri":"spotify:track:x","name":"Song","duration_ms":200000,
+                 "artists":[{"name":"A"},{"name":null}],
+                 "album":{"name":"Album","images":[
+                   {"url":"https://i.scdn.co/image/big","width":640},
+                   {"url":"https://i.scdn.co/image/mid","width":300},
+                   {"url":"https://evil.example/x","width":300}]}}}"#,
+        );
+        http.push(
+            200,
+            r#"{"device":{"id":"abc123","name":"Phone","type":"Smartphone"},
+               "is_playing":false,"progress_ms":null,"repeat_state":"context",
+               "actions":{"pausing":true},
+               "item":{"type":"episode","uri":"spotify:episode:y","name":"Episode",
+                 "duration_ms":90000,"images":[],
+                 "show":{"name":"Show","images":[{"url":"https://i.scdn.co/image/show","width":64}]}}}"#,
+        );
+        http.push(204, "");
+        http.push(200, r#"{"device":null,"is_playing":false}"#);
+        let access = Secret::new("a");
+
+        let reply = player_state(&http, &access).await.unwrap().unwrap();
+        assert_eq!(reply.device.id, "abc123");
+        assert_eq!(reply.device.kind, DeviceKind::Smartphone);
+        let state = reply.state;
+        assert!(!state.paused && state.shuffle);
+        assert_eq!(state.repeat, RepeatMode::Track);
+        assert_eq!((state.position_ms, state.duration_ms), (5000, 200_000));
+        assert!(state.disallows.seek && state.disallows.previous && !state.disallows.next);
+        let track = state.track.unwrap();
+        assert_eq!(track.artists, ["A"]);
+        assert_eq!(track.album, "Album");
+        assert_eq!(
+            track.image_url.as_deref(),
+            Some("https://i.scdn.co/image/mid")
+        );
+
+        let state = player_state(&http, &access).await.unwrap().unwrap().state;
+        assert!(state.paused && state.disallows.pause);
+        assert_eq!(state.repeat, RepeatMode::Context);
+        assert_eq!(state.position_ms, 0);
+        let episode = state.track.unwrap();
+        assert_eq!(episode.artists, ["Show"]);
+        assert_eq!(
+            episode.image_url.as_deref(),
+            Some("https://i.scdn.co/image/show")
+        );
+
+        assert_eq!(player_state(&http, &access).await.unwrap(), None);
+        assert_eq!(player_state(&http, &access).await.unwrap(), None);
+        assert_eq!(
+            http.requests()[0].url,
+            "https://api.spotify.com/v1/me/player?additional_types=episode"
+        );
     }
 
     #[tokio::test]

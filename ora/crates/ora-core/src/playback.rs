@@ -1,15 +1,18 @@
-//! Embedded playback (Tier A): the state the shared SDK bridge reports, and the commands that
-//! start playback on this device.
+//! Playback: embedded playback (Tier A, the state the shared SDK bridge reports) and control
+//! of other Spotify Connect devices (Tier B, through the Web API).
 //!
 //! Rules:
-//! - Everything from the bridge is untrusted input: it is validated, trimmed and reduced to the
-//!   fields `ora-types` defines, and anything malformed is dropped.
+//! - Everything from the bridge or the Web API is untrusted input: it is validated, trimmed and
+//!   reduced to the fields `ora-types` defines, and anything malformed is dropped.
 //! - The access token reaches the bridge only through `sdk_token`, for the SDK's
 //!   `getOAuthToken`, and only once the sign-in covers `EmbeddedPlayback`.
-//! - Progress is never polled: the UI interpolates `positionMs` from `updatedAtMs`.
+//! - Device IDs stay here; clients get opaque keys.
+//! - While this app's SDK device plays, its reports win over the Web API (DO_NEXT §4.5).
+//! - Progress is never polled: the UI interpolates `positionMs` from `updatedAtMs`, and the
+//!   Web API state is fetched only on events, on focus and at a low rate.
 
 use crate::{
-    api::{self, is_allowed_image},
+    api::{self, is_allowed_image, ApiDevice, PlayerState},
     browser::Browser,
     http::HttpClient,
     link::{self, Kind},
@@ -18,10 +21,12 @@ use crate::{
     Ora,
 };
 use ora_types::{
-    Feature, NowPlaying, OraError, PlaybackIssue, PlaybackStatus, PlayerCommand, Probe,
-    SdkErrorKind, SdkEvent, SdkState, Tier,
+    Device, DeviceKind, Feature, ForbiddenHint, NowPlaying, OraError, PlaybackIssue,
+    PlaybackStatus, PlayerCommand, Probe, SdkErrorKind, SdkEvent, SdkState, Tier,
 };
+use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     sync::{Mutex, MutexGuard},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -30,19 +35,41 @@ use tokio::sync::watch;
 const MAX_TEXT: usize = 300;
 const MAX_ARTISTS: usize = 20;
 const MAX_CSP_BLOCKS: usize = 10;
+const MAX_DEVICE_NAME: usize = 100;
+/// Spotify runs player commands asynchronously, so the follow-up read waits this long.
+const RECONCILE_DELAY: std::time::Duration = std::time::Duration::from_millis(600);
 /// Longer than any track or episode, so a larger position is nonsense.
 const MAX_POSITION_MS: u64 = 24 * 60 * 60 * 1000;
 
+/// Locks are always taken in the order `device`, `remote`, then the status, and `remote` is
+/// never locked while the status is borrowed.
 pub struct Playback {
     /// The SDK's device ID while Spotify knows this app as a device.
     device: Mutex<Option<String>>,
+    remote: Mutex<Remote>,
     status: watch::Sender<PlaybackStatus>,
+}
+
+#[derive(Default)]
+struct Remote {
+    /// The active device's real ID while it isn't this app.
+    active: Option<String>,
+    /// Keys handed to the UI, to the real ID and whether Spotify restricts the device.
+    known: HashMap<String, (String, bool)>,
+}
+
+/// The active remote device a command goes to.
+struct RemoteTarget {
+    id: String,
+    restricted: bool,
+    supports_volume: bool,
 }
 
 impl Default for Playback {
     fn default() -> Self {
         Self {
             device: Mutex::new(None),
+            remote: Mutex::new(Remote::default()),
             status: watch::Sender::new(PlaybackStatus::default()),
         }
     }
@@ -63,6 +90,12 @@ impl Playback {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn remote(&self) -> MutexGuard<'_, Remote> {
+        self.remote
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn device_id(&self) -> Option<String> {
         self.device().clone()
     }
@@ -79,6 +112,7 @@ impl Playback {
     /// Back to "not enabled", for example after sign-out or a disconnect.
     pub fn reset(&self) {
         *self.device() = None;
+        *self.remote() = Remote::default();
         self.status.send_modify(|status| {
             *status = PlaybackStatus {
                 probe: status.probe.take(),
@@ -91,6 +125,7 @@ impl Playback {
     /// Applies one bridge report. Malformed reports change nothing.
     pub fn apply(&self, event: SdkEvent) {
         let mut device = self.device();
+        let mut remote = self.remote();
         self.status.send_if_modified(|status| match event {
             SdkEvent::Probe { probe } => {
                 let probe = clean_probe(probe);
@@ -112,22 +147,32 @@ impl Playback {
             SdkEvent::NotReady { device_id } if device.as_deref() == Some(&device_id) => {
                 *device = None;
                 status.tier = Tier::Connecting;
+                forget_this_app(status);
                 true
             }
+            // Playback moved to another device; a Web API refresh shows which.
             SdkEvent::State { state: None } if device.is_some() => {
                 status.tier = Tier::Ready;
                 status.now_playing = None;
                 status.paused = true;
+                forget_this_app(status);
                 true
             }
-            SdkEvent::State { state: Some(state) } if device.is_some() => {
-                apply_state(status, state);
-                true
-            }
+            SdkEvent::State { state: Some(state) } => match device.as_deref() {
+                Some(id) => {
+                    remote.active = None;
+                    status.tier = Tier::Active;
+                    status.device = Some(this_app(id));
+                    fill(status, state);
+                    true
+                }
+                None => false,
+            },
             SdkEvent::Error { error, message } => {
                 if error == SdkErrorKind::Initialization {
                     *device = None;
                     status.tier = Tier::Unsupported;
+                    forget_this_app(status);
                 }
                 status.issue = Some(PlaybackIssue {
                     kind: error,
@@ -147,6 +192,125 @@ impl Playback {
         });
     }
 
+    /// Mirrors the Web API's playback state. While this app plays, its SDK reports win.
+    pub(crate) fn apply_remote(&self, reported: Option<PlayerState>) {
+        let device = self.device();
+        let mut remote = self.remote();
+        self.status.send_if_modified(|status| {
+            if status.tier == Tier::Active {
+                remote.active = None;
+                return false;
+            }
+            match reported {
+                // Spotify says this app is active; the SDK's own report follows.
+                Some(reported) if device.as_deref() == Some(reported.device.id.as_str()) => {
+                    remote.active = None;
+                    false
+                }
+                Some(PlayerState { device, state }) => {
+                    let key = device_key(&device.id);
+                    remote
+                        .known
+                        .insert(key.clone(), (device.id.clone(), device.restricted));
+                    remote.active = Some(device.id.clone());
+                    status.device = Some(public_device(&device, key, false));
+                    fill(status, state);
+                    true
+                }
+                None => {
+                    remote.active = None;
+                    let changed = status.device.is_some() || status.now_playing.is_some();
+                    status.device = None;
+                    status.now_playing = None;
+                    status.paused = true;
+                    status.position_ms = 0;
+                    status.duration_ms = 0;
+                    changed
+                }
+            }
+        });
+    }
+
+    /// Keys the device list for the UI and remembers which real ID each key means.
+    pub(crate) fn remember_devices(&self, devices: Vec<ApiDevice>) -> Vec<Device> {
+        let sdk = self.device().clone();
+        let mut remote = self.remote();
+        remote.known.clear();
+        devices
+            .into_iter()
+            .map(|device| {
+                let key = device_key(&device.id);
+                let this_app = sdk.as_deref() == Some(device.id.as_str());
+                remote
+                    .known
+                    .insert(key.clone(), (device.id.clone(), device.restricted));
+                public_device(&device, key, this_app)
+            })
+            .collect()
+    }
+
+    /// The real ID behind a key from the last device list (or this app's own device).
+    fn device_for(&self, key: &str) -> Result<String, OraError> {
+        let sdk = self.device().clone();
+        if let Some(sdk) = sdk.filter(|id| device_key(id) == key) {
+            return Ok(sdk);
+        }
+        match self.remote().known.get(key) {
+            Some((_, true)) => Err(OraError::Forbidden {
+                hint: ForbiddenHint::Restricted,
+            }),
+            Some((id, false)) => Ok(id.clone()),
+            None => Err(OraError::DeviceUnavailable),
+        }
+    }
+
+    /// The active remote device, unless this app is the one playing.
+    fn remote_target(&self) -> Option<RemoteTarget> {
+        let id = self.remote().active.clone()?;
+        let status = self.status.borrow();
+        if status.tier == Tier::Active {
+            return None;
+        }
+        let device = status.device.as_ref()?;
+        Some(RemoteTarget {
+            id,
+            restricted: device.restricted,
+            supports_volume: device.supports_volume,
+        })
+    }
+
+    /// Shows a remote command's expected result until the next refresh confirms it.
+    fn assume(&self, command: &PlayerCommand) {
+        self.status.send_modify(|status| {
+            let now = now_ms();
+            match *command {
+                PlayerCommand::TogglePlay => {
+                    if !status.paused {
+                        let played = now.saturating_sub(status.updated_at_ms);
+                        status.position_ms = status
+                            .position_ms
+                            .saturating_add(played)
+                            .min(status.duration_ms);
+                    }
+                    status.paused = !status.paused;
+                    status.updated_at_ms = now;
+                }
+                PlayerCommand::Seek { position_ms } => {
+                    status.position_ms = position_ms;
+                    status.updated_at_ms = now;
+                }
+                PlayerCommand::SetShuffle { state } => status.shuffle = state,
+                PlayerCommand::SetRepeat { mode } => status.repeat = mode,
+                PlayerCommand::SetVolume { volume } => {
+                    if let Some(device) = &mut status.device {
+                        device.volume_percent = Some(percent(volume));
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+
     /// A UI command for the SDK, validated. Only `Disconnect` works without a ready device.
     pub fn command(&self, command: PlayerCommand) -> Result<PlayerCommand, OraError> {
         if command == PlayerCommand::Disconnect {
@@ -156,6 +320,11 @@ impl Playback {
         if self.device().is_none() {
             return Err(OraError::NoActiveDevice);
         }
+        self.bound(command)
+    }
+
+    /// Keeps a seek within the item and the volume within 0 to 1.
+    fn bound(&self, command: PlayerCommand) -> Result<PlayerCommand, OraError> {
         match command {
             PlayerCommand::Seek { position_ms } => {
                 let duration = self.status.borrow().duration_ms;
@@ -186,12 +355,19 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         self.fresh_access().await
     }
 
-    /// A player command from the UI: shuffle and repeat run here through the Web API (the SDK
-    /// has no methods for them); everything else is returned for the SDK to run.
+    /// A player command from the UI. While another device is active, it runs here through the
+    /// Web API. While this app plays, shuffle and repeat run here (the SDK has no methods for
+    /// them) and everything else is returned for the SDK to run. `None` means it ran here.
     pub async fn player_command(
         &self,
         command: PlayerCommand,
     ) -> Result<Option<PlayerCommand>, OraError> {
+        if command != PlayerCommand::Disconnect {
+            if let Some(target) = self.playback().remote_target() {
+                self.remote_command(target, command).await?;
+                return Ok(None);
+            }
+        }
         let command = self.playback().command(command)?;
         if !matches!(
             command,
@@ -222,6 +398,82 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             _ => {}
         }
         Ok(None)
+    }
+
+    async fn remote_command(
+        &self,
+        target: RemoteTarget,
+        command: PlayerCommand,
+    ) -> Result<(), OraError> {
+        self.require(Feature::ConnectControl)?;
+        if target.restricted {
+            return Err(OraError::Forbidden {
+                hint: ForbiddenHint::Restricted,
+            });
+        }
+        if matches!(command, PlayerCommand::SetVolume { .. }) && !target.supports_volume {
+            return Err(OraError::Unsupported);
+        }
+        let command = self.playback().bound(command)?;
+        let paused = self.playback().status().paused;
+        let (http, id, command_ref) = (self.http(), target.id.as_str(), &command);
+        self.authorised(|access| async move {
+            match *command_ref {
+                PlayerCommand::TogglePlay if paused => api::resume(http, &access, id).await,
+                PlayerCommand::TogglePlay => api::pause(http, &access, id).await,
+                PlayerCommand::Seek { position_ms } => {
+                    api::seek(http, &access, id, position_ms).await
+                }
+                PlayerCommand::Next => api::next(http, &access, id).await,
+                PlayerCommand::Previous => api::previous(http, &access, id).await,
+                PlayerCommand::SetVolume { volume } => {
+                    api::volume(http, &access, id, percent(volume)).await
+                }
+                PlayerCommand::SetShuffle { state } => api::shuffle(http, &access, id, state).await,
+                PlayerCommand::SetRepeat { mode } => api::repeat(http, &access, id, mode).await,
+                PlayerCommand::Disconnect => Ok(()),
+            }
+        })
+        .await?;
+        self.playback().assume(&command);
+        Ok(())
+    }
+
+    /// Fetches the Web API's playback state and mirrors it, unless this app is the one playing.
+    pub async fn refresh_playback(&self) -> Result<(), OraError> {
+        self.require(Feature::ConnectControl)?;
+        let http = self.http();
+        let state = self
+            .authorised(|access| async move { api::player_state(http, &access).await })
+            .await?;
+        self.playback().apply_remote(state);
+        Ok(())
+    }
+
+    /// A refresh shortly after a command or a device change, to confirm what Spotify did.
+    /// Failures are left for the next refresh: this one is only a follow-up.
+    pub async fn reconcile_playback(&self) {
+        tokio::time::sleep(RECONCILE_DELAY).await;
+        let _ = self.refresh_playback().await;
+    }
+
+    /// The account's Spotify Connect devices, with opaque keys for `transfer_playback`.
+    pub async fn list_devices(&self) -> Result<Vec<Device>, OraError> {
+        self.require(Feature::DevicePicker)?;
+        let http = self.http();
+        let devices = self
+            .authorised(|access| async move { api::devices(http, &access).await })
+            .await?;
+        Ok(self.playback().remember_devices(devices))
+    }
+
+    /// Moves playback to the device behind `key` and keeps it playing.
+    pub async fn transfer_playback(&self, key: &str) -> Result<(), OraError> {
+        self.require(Feature::TransferPlayback)?;
+        let id = self.playback().device_for(key)?;
+        let (http, id) = (self.http(), id.as_str());
+        self.authorised(|access| async move { api::transfer(http, &access, id, true).await })
+            .await
     }
 
     /// Starts playback on this app's SDK device: the pasted link when there is one, otherwise
@@ -256,8 +508,8 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     }
 }
 
-fn apply_state(status: &mut PlaybackStatus, state: SdkState) {
-    status.tier = Tier::Active;
+/// Copies a validated state report (from the SDK or the Web API) into the status.
+fn fill(status: &mut PlaybackStatus, state: SdkState) {
     status.paused = state.paused;
     status.duration_ms = state.duration_ms.min(MAX_POSITION_MS);
     status.position_ms = state.position_ms.min(status.duration_ms);
@@ -286,6 +538,52 @@ fn apply_state(status: &mut PlaybackStatus, state: SdkState) {
                 .filter(|url| url.len() <= 512 && is_allowed_image(url)),
         })
     });
+}
+
+/// A stable, opaque key for a device ID: it can't be turned back into the ID.
+fn device_key(id: &str) -> String {
+    Sha256::digest(id.as_bytes())[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn public_device(device: &ApiDevice, key: String, this_app: bool) -> Device {
+    Device {
+        key,
+        name: clip(&device.name, MAX_DEVICE_NAME),
+        kind: device.kind,
+        active: device.active,
+        restricted: device.restricted,
+        this_app,
+        supports_volume: device.supports_volume,
+        volume_percent: device.volume_percent,
+    }
+}
+
+/// This app's SDK device while it plays. Clients show their own name for it.
+fn this_app(id: &str) -> Device {
+    Device {
+        key: device_key(id),
+        name: String::new(),
+        kind: DeviceKind::Computer,
+        active: true,
+        restricted: false,
+        this_app: true,
+        supports_volume: true,
+        volume_percent: None,
+    }
+}
+
+fn forget_this_app(status: &mut PlaybackStatus) {
+    if status.device.as_ref().is_some_and(|device| device.this_app) {
+        status.device = None;
+    }
+}
+
+/// 0.0–1.0 to Spotify's whole percent.
+fn percent(volume: f64) -> u8 {
+    (volume.clamp(0.0, 1.0) * 100.0).round() as u8
 }
 
 fn now_ms() -> u64 {
@@ -507,6 +805,124 @@ mod tests {
             let now = playback.status().now_playing.unwrap();
             assert_eq!(now.image_url, None, "{url}");
         }
+    }
+
+    fn phone(id: &str, restricted: bool) -> ApiDevice {
+        ApiDevice {
+            id: id.into(),
+            name: "Phone\u{7}".into(),
+            kind: DeviceKind::Smartphone,
+            active: true,
+            restricted,
+            supports_volume: false,
+            volume_percent: None,
+        }
+    }
+
+    fn remote_state(device: ApiDevice) -> PlayerState {
+        let SdkEvent::State { state: Some(state) } =
+            state(format!("spotify:track:{}", id()), "Remote song")
+        else {
+            unreachable!()
+        };
+        PlayerState { device, state }
+    }
+
+    #[test]
+    fn another_device_is_mirrored_until_this_app_plays() {
+        let playback = Playback::default();
+        ready(&playback);
+        playback.apply_remote(Some(remote_state(phone("phone1", false))));
+        let status = playback.status();
+        assert_eq!(status.tier, Tier::Ready);
+        let device = status.device.unwrap();
+        assert_eq!(device.name, "Phone");
+        assert!(!device.this_app && device.active);
+        assert_eq!(device.key.len(), 16);
+        assert!(!device.key.contains("phone1"));
+        assert_eq!(status.now_playing.unwrap().name, "Remote song");
+        assert!(playback.remote_target().is_some());
+
+        // This app starts playing: the SDK's reports win from now on.
+        playback.apply(state(format!("spotify:track:{}", id()), "Here"));
+        playback.apply_remote(Some(remote_state(phone("phone1", false))));
+        let status = playback.status();
+        assert_eq!(status.tier, Tier::Active);
+        assert!(status.device.unwrap().this_app);
+        assert_eq!(status.now_playing.unwrap().name, "Here");
+        assert!(playback.remote_target().is_none());
+
+        // Playback moves away, and Spotify reports nothing active.
+        playback.apply(SdkEvent::State { state: None });
+        assert_eq!(playback.status().device, None);
+        playback.apply_remote(Some(remote_state(phone("phone1", false))));
+        assert!(playback.status().device.is_some());
+        playback.apply_remote(None);
+        let status = playback.status();
+        assert_eq!((status.device, status.now_playing), (None, None));
+        assert!(playback.remote_target().is_none());
+    }
+
+    #[test]
+    fn a_web_api_report_of_this_app_waits_for_the_sdk() {
+        let playback = Playback::default();
+        ready(&playback);
+        let before = playback.status();
+        playback.apply_remote(Some(remote_state(phone("device1", false))));
+        assert_eq!(playback.status(), before);
+        assert!(playback.remote_target().is_none());
+    }
+
+    #[test]
+    fn device_keys_are_opaque_and_checked() {
+        let playback = Playback::default();
+        ready(&playback);
+        let mut speaker = phone("speaker1", true);
+        speaker.active = false;
+        let listed = playback.remember_devices(vec![
+            phone("device1", false),
+            phone("phone1", false),
+            speaker,
+        ]);
+        assert!(listed[0].this_app && !listed[1].this_app);
+        assert_ne!(listed[0].key, listed[1].key);
+        assert_eq!(playback.device_for(&listed[1].key).unwrap(), "phone1");
+        assert_eq!(playback.device_for(&listed[0].key).unwrap(), "device1");
+        assert_eq!(
+            playback.device_for(&listed[2].key).err(),
+            Some(OraError::Forbidden {
+                hint: ForbiddenHint::Restricted
+            })
+        );
+        assert_eq!(
+            playback.device_for("0123456789abcdef").err(),
+            Some(OraError::DeviceUnavailable)
+        );
+        // A fresh list forgets devices that have gone.
+        playback.remember_devices(vec![phone("phone2", false)]);
+        assert_eq!(
+            playback.device_for(&listed[1].key).err(),
+            Some(OraError::DeviceUnavailable)
+        );
+    }
+
+    #[test]
+    fn remote_commands_show_their_result_until_confirmed() {
+        let playback = Playback::default();
+        playback.apply_remote(Some(remote_state(phone("phone1", false))));
+        playback.assume(&PlayerCommand::TogglePlay);
+        assert!(playback.status().paused);
+        playback.assume(&PlayerCommand::Seek { position_ms: 9_000 });
+        assert_eq!(playback.status().position_ms, 9_000);
+        playback.assume(&PlayerCommand::SetShuffle { state: false });
+        playback.assume(&PlayerCommand::SetRepeat {
+            mode: RepeatMode::Track,
+        });
+        playback.assume(&PlayerCommand::SetVolume { volume: 0.456 });
+        let status = playback.status();
+        assert!(!status.shuffle);
+        assert_eq!(status.repeat, RepeatMode::Track);
+        assert_eq!(status.device.unwrap().volume_percent, Some(46));
     }
 
     #[test]

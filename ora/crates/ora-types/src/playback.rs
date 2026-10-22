@@ -1,5 +1,6 @@
-//! Embedded playback through Spotify's Web Playback SDK: what the shared bridge reports, the
-//! commands it runs, and the status every client shows. No tokens appear here.
+//! Playback: what the shared Web Playback SDK bridge reports, the commands it runs, the
+//! Spotify devices a client can control, and the status every client shows. No tokens or
+//! device IDs appear here.
 
 use serde::{Deserialize, Serialize};
 
@@ -172,6 +173,40 @@ pub enum Tier {
     Active,
 }
 
+/// Spotify's device `type`, reduced to what a client shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub enum DeviceKind {
+    Computer,
+    Smartphone,
+    Tablet,
+    Speaker,
+    Tv,
+    GameConsole,
+    Automobile,
+    #[default]
+    Other,
+}
+
+/// A Spotify Connect device. `key` is an opaque handle for choosing it; the real device ID
+/// stays in Rust.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct Device {
+    pub key: String,
+    pub name: String,
+    pub kind: DeviceKind,
+    pub active: bool,
+    /// Spotify accepts no commands for this device from other apps.
+    pub restricted: bool,
+    /// This app's own Web Playback SDK device.
+    pub this_app: bool,
+    pub supports_volume: bool,
+    pub volume_percent: Option<u8>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -193,13 +228,16 @@ pub struct PlaybackIssue {
     pub message: String,
 }
 
-/// Everything the UI needs about embedded playback, pushed on every change. Progress is
-/// interpolated by the UI from `positionMs` at `updatedAtMs` while not paused.
+/// Everything the UI needs about playback, pushed on every change. `tier` is this app's own
+/// SDK device; `device` is whichever device is active, and the now-playing fields describe it.
+/// Progress is interpolated by the UI from `positionMs` at `updatedAtMs` while not paused.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct PlaybackStatus {
     pub tier: Tier,
+    /// The active device: this app while the SDK plays, otherwise from the Web API.
+    pub device: Option<Device>,
     pub now_playing: Option<NowPlaying>,
     pub paused: bool,
     pub position_ms: u64,

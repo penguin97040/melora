@@ -997,6 +997,127 @@ async fn a_premium_refusal_is_returned_without_retrying() {
     assert_eq!(h.ora.status().last_error, None);
 }
 
+const REMOTE_STATE: &str = r#"{"device":{"id":"phone1","is_active":true,"name":"Phone",
+    "type":"Smartphone","supports_volume":false},"is_playing":true,"progress_ms":1000,
+    "item":{"uri":"spotify:track:AbCd0123456789xyzXYZ01","name":"Song","duration_ms":200000,
+    "artists":[{"name":"A"}],"album":{"name":"B","images":[]}}}"#;
+
+#[tokio::test]
+async fn another_device_is_controlled_through_the_web_api() {
+    let h = playback_ready("remote-control").await;
+    h.http.push(200, REMOTE_STATE);
+    h.ora.refresh_playback().await.unwrap();
+    assert_eq!(h.ora.playback().status().device.unwrap().name, "Phone");
+
+    let before = h.http.requests().len();
+    for _ in 0..4 {
+        h.http.push(204, "");
+    }
+    let commands = [
+        ora_types::PlayerCommand::TogglePlay,
+        ora_types::PlayerCommand::TogglePlay,
+        ora_types::PlayerCommand::Next,
+        ora_types::PlayerCommand::SetShuffle { state: true },
+    ];
+    for command in commands {
+        assert_eq!(h.ora.player_command(command).await, Ok(None));
+    }
+    // The phone can't change volume, so nothing is sent.
+    assert_eq!(
+        h.ora
+            .player_command(ora_types::PlayerCommand::SetVolume { volume: 0.5 })
+            .await,
+        Err(OraError::Unsupported)
+    );
+    let shape: Vec<(Method, String)> = h.http.requests()[before..]
+        .iter()
+        .map(|r| (r.method, r.url.clone()))
+        .collect();
+    let api = "https://api.spotify.com/v1/me/player";
+    assert_eq!(
+        shape,
+        [
+            (Method::Put, format!("{api}/pause?device_id=phone1")),
+            (Method::Put, format!("{api}/play?device_id=phone1")),
+            (Method::Post, format!("{api}/next?device_id=phone1")),
+            (
+                Method::Put,
+                format!("{api}/shuffle?state=true&device_id=phone1")
+            ),
+        ]
+    );
+    assert!(h.ora.playback().status().shuffle);
+}
+
+#[tokio::test]
+async fn a_restricted_device_gets_no_commands() {
+    let h = playback_ready("remote-restricted").await;
+    h.http.push(
+        200,
+        &REMOTE_STATE.replace(r#""is_active":true"#, r#""is_restricted":true"#),
+    );
+    h.ora.refresh_playback().await.unwrap();
+    let before = h.http.requests().len();
+    assert_eq!(
+        h.ora.player_command(ora_types::PlayerCommand::Next).await,
+        Err(OraError::Forbidden {
+            hint: ForbiddenHint::Restricted
+        })
+    );
+    assert_eq!(h.http.requests().len(), before);
+}
+
+#[tokio::test]
+async fn devices_are_listed_and_chosen_by_key() {
+    let h = playback_ready("device-picker").await;
+    h.http.push(
+        200,
+        r#"{"devices":[{"id":"device1","name":"Melora","type":"Computer"},
+            {"id":"phone1","name":"Phone","type":"Smartphone","is_active":true}]}"#,
+    );
+    let devices = h.ora.list_devices().await.unwrap();
+    assert!(devices[0].this_app);
+    let before = h.http.requests().len();
+    h.http.push(204, "");
+    h.ora.transfer_playback(&devices[1].key).await.unwrap();
+    let seen = &h.http.requests()[before..];
+    assert_eq!(seen[0].url, "https://api.spotify.com/v1/me/player");
+    assert_eq!(
+        seen[0].json,
+        Some(serde_json::json!({"device_ids": ["phone1"], "play": true}))
+    );
+    assert_eq!(
+        h.ora.transfer_playback("ffffffffffffffff").await.err(),
+        Some(OraError::DeviceUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn device_control_needs_the_permission() {
+    let h = harness("remote-scope", User::Approve);
+    assert_eq!(
+        h.ora.refresh_playback().await.err(),
+        Some(OraError::SignedOut)
+    );
+    h.http.push(200, &tokens_json("acc1", Some("ref1")));
+    h.http.push(200, ME);
+    h.ora.sign_in(None).await.unwrap();
+    let before = h.http.requests().len();
+    assert_eq!(
+        h.ora.refresh_playback().await.err(),
+        Some(OraError::NeedsScope {
+            feature: Feature::ConnectControl
+        })
+    );
+    assert_eq!(
+        h.ora.list_devices().await.err(),
+        Some(OraError::NeedsScope {
+            feature: Feature::DevicePicker
+        })
+    );
+    assert_eq!(h.http.requests().len(), before);
+}
+
 #[tokio::test]
 async fn shuffle_and_repeat_run_through_the_web_api_and_the_rest_go_to_the_sdk() {
     let h = playback_ready("player-command").await;

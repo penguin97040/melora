@@ -7,7 +7,7 @@ use ora_core::{
     browser::{self, Browser, SystemBrowser},
     http::ReqwestClient,
     store::KeyringStore,
-    types::{Feature, OraError, PlaybackStatus, PlayerCommand, Profile, SdkEvent, Status},
+    types::{Device, Feature, OraError, PlaybackStatus, PlayerCommand, Profile, SdkEvent, Status},
     Options, Ora,
 };
 use std::{
@@ -100,7 +100,10 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             sdk_attach,
             subscribe_playback,
             play_here,
-            playback_command
+            playback_command,
+            refresh_playback,
+            list_devices,
+            transfer_playback
         ])
         .setup(move |app, _api| {
             let settings_dir =
@@ -243,10 +246,20 @@ async fn sdk_event<R: Runtime>(
     event: SdkEvent,
 ) -> Result<(), OraError> {
     main_only(&window)?;
+    let moved_away = matches!(event, SdkEvent::State { state: None });
     let playback = ora.0.playback();
     playback.apply(event);
     SDK_FRAME_ALLOWED.store(playback.drm_available(), Ordering::SeqCst);
+    if moved_away {
+        // Playback left this app: show the device it went to.
+        reconcile(&ora.0);
+    }
     Ok(())
+}
+
+fn reconcile(core: &Arc<Core>) {
+    let core = Arc::clone(core);
+    tauri::async_runtime::spawn(async move { core.reconcile_playback().await });
 }
 
 /// The bridge registers the channel its player commands arrive on.
@@ -297,8 +310,9 @@ async fn play_here<R: Runtime>(
     ora.0.play_here(link.as_deref()).await
 }
 
-/// Play/pause, seek, next, previous, volume and disconnect run in the SDK on this device;
-/// shuffle and repeat go through the Web API.
+/// While this app plays, play/pause, seek, next, previous, volume and disconnect run in the
+/// SDK, and shuffle and repeat go through the Web API. Another active device is controlled
+/// entirely through the Web API, and a refresh follows to confirm the result.
 #[tauri::command]
 async fn playback_command<R: Runtime>(
     window: Window<R>,
@@ -309,8 +323,44 @@ async fn playback_command<R: Runtime>(
     main_only(&window)?;
     match ora.0.player_command(command).await? {
         Some(command) => bridge.send(command),
-        None => Ok(()),
+        None => {
+            reconcile(&ora.0);
+            Ok(())
+        }
     }
+}
+
+/// Reads which device is active and what it plays (on focus, at a low rate, and on events).
+#[tauri::command]
+async fn refresh_playback<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.refresh_playback().await
+}
+
+/// The account's Spotify Connect devices, for the device picker.
+#[tauri::command]
+async fn list_devices<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+) -> Result<Vec<Device>, OraError> {
+    main_only(&window)?;
+    ora.0.list_devices().await
+}
+
+/// Moves playback to the device behind a key from `list_devices`.
+#[tauri::command]
+async fn transfer_playback<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    key: String,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.transfer_playback(&key).await?;
+    reconcile(&ora.0);
+    Ok(())
 }
 
 /// Opens an `https://open.spotify.com/...` page in the system browser. Nothing else.

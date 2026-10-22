@@ -14,6 +14,9 @@ const COMMANDS: &[&str] = &[
     "subscribe_playback",
     "play_here",
     "playback_command",
+    "refresh_playback",
+    "list_devices",
+    "transfer_playback",
 ];
 
 fn main() {

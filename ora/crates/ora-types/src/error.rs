@@ -58,6 +58,8 @@ pub enum OraError {
     },
     NotFound,
     NoActiveDevice,
+    /// The chosen device has gone from Spotify's device list.
+    DeviceUnavailable,
     Offline,
     Network,
     Cancelled,
