@@ -11,7 +11,7 @@ async function inspect(directory) {
     const file = path.join(directory, entry.name);
     if (entry.isDirectory()) await inspect(file);
     else if (
-      /agents|changelog|mistakes|instructions|build_spec|start-melora|foobar_ui|\.env|\.map$|\.ps1$/i.test(
+      /agents|claude\.md|handoff|do_next|instructions|private-archive|spotify_integration|changelog|mistakes|build_spec|start-melora|foobar_ui|\.env|\.map$|\.ps1$/i.test(
         entry.name,
       )
     ) {

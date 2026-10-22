@@ -11,7 +11,8 @@ from pathlib import Path
 
 PRIVATE = ('agents.md', 'changelog.md', 'mistakes.md', 'codex_start_here.md',
            'instructions.md', 'spotify_client_build_spec.md', 'start-melora-*.ps1',
-           'foobar_ui.png', '.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx',
+           'foobar_ui.png', 'claude.md', 'handoff.md', 'do_next.md', 'user_instructions.md',
+           'spotify_integration.md', '.private-archive', '.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx',
            '*.mobileprovision', '*.p8', '*.crt', '*.cer', '*.der', '*.keystore', '*.jks', '*.db', '*.sqlite*', '*.exe', '*.zip')
 OUTPUTS = {'node_modules', 'target', 'dist', 'artifacts', 'data', '.xwin-cache', 'credentials', 'account-data', 'secrets'}
 RULES = {
