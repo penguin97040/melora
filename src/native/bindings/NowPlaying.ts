@@ -4,4 +4,8 @@ export type NowPlaying = { name: string, artists: Array<string>, album: string,
 /**
  * `https://open.spotify.com/…` for "Open in Spotify".
  */
-spotifyUrl: string | null, };
+spotifyUrl: string | null, 
+/**
+ * Album artwork, only from the image host clients allow in their CSP.
+ */
+imageUrl: string | null, };

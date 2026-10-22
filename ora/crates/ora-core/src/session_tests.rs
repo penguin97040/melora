@@ -996,3 +996,49 @@ async fn a_premium_refusal_is_returned_without_retrying() {
     // A player refusal isn't an account problem, so Settings doesn't show it.
     assert_eq!(h.ora.status().last_error, None);
 }
+
+#[tokio::test]
+async fn shuffle_and_repeat_run_through_the_web_api_and_the_rest_go_to_the_sdk() {
+    let h = playback_ready("player-command").await;
+    let before = h.http.requests().len();
+    h.http.push(204, "");
+    h.http.push(204, "");
+    assert_eq!(
+        h.ora
+            .player_command(ora_types::PlayerCommand::SetShuffle { state: true })
+            .await,
+        Ok(None)
+    );
+    assert_eq!(
+        h.ora
+            .player_command(ora_types::PlayerCommand::SetRepeat {
+                mode: ora_types::RepeatMode::Track
+            })
+            .await,
+        Ok(None)
+    );
+    assert_eq!(
+        h.ora.player_command(ora_types::PlayerCommand::Next).await,
+        Ok(Some(ora_types::PlayerCommand::Next))
+    );
+    let urls: Vec<String> = h.http.requests()[before..]
+        .iter()
+        .map(|r| r.url.clone())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://api.spotify.com/v1/me/player/shuffle?state=true&device_id=device1",
+            "https://api.spotify.com/v1/me/player/repeat?state=track&device_id=device1"
+        ]
+    );
+
+    h.ora.playback().reset();
+    assert_eq!(
+        h.ora
+            .player_command(ora_types::PlayerCommand::SetShuffle { state: false })
+            .await,
+        Err(OraError::NoActiveDevice)
+    );
+    assert_eq!(h.http.requests().len() - before, 2);
+}

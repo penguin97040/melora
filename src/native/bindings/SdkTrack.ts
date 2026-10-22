@@ -3,4 +3,8 @@
 /**
  * The current item, reduced from the SDK's `player_state_changed` by the bridge.
  */
-export type SdkTrack = { uri: string, name: string, artists: Array<string>, album: string, };
+export type SdkTrack = { uri: string, name: string, artists: Array<string>, album: string, 
+/**
+ * The album image the bridge picked (closest to 300 px wide), if any.
+ */
+imageUrl: string | null, };

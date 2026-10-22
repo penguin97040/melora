@@ -9,7 +9,7 @@
 //! - Progress is never polled: the UI interpolates `positionMs` from `updatedAtMs`.
 
 use crate::{
-    api,
+    api::{self, is_allowed_image},
     browser::Browser,
     http::HttpClient,
     link::{self, Kind},
@@ -186,6 +186,44 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         self.fresh_access().await
     }
 
+    /// A player command from the UI: shuffle and repeat run here through the Web API (the SDK
+    /// has no methods for them); everything else is returned for the SDK to run.
+    pub async fn player_command(
+        &self,
+        command: PlayerCommand,
+    ) -> Result<Option<PlayerCommand>, OraError> {
+        let command = self.playback().command(command)?;
+        if !matches!(
+            command,
+            PlayerCommand::SetShuffle { .. } | PlayerCommand::SetRepeat { .. }
+        ) {
+            return Ok(Some(command));
+        }
+        self.require(Feature::EmbeddedPlayback)?;
+        let device = self
+            .playback()
+            .device_id()
+            .ok_or(OraError::NoActiveDevice)?;
+        let device = device.as_str();
+        let http = self.http();
+        match command {
+            PlayerCommand::SetShuffle { state } => {
+                self.authorised(
+                    |access| async move { api::shuffle(http, &access, device, state).await },
+                )
+                .await?
+            }
+            PlayerCommand::SetRepeat { mode } => {
+                self.authorised(
+                    |access| async move { api::repeat(http, &access, device, mode).await },
+                )
+                .await?
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
     /// Starts playback on this app's SDK device: the pasted link when there is one, otherwise
     /// whatever the account was last playing (transferred here).
     pub async fn play_here(&self, link: Option<&str>) -> Result<(), OraError> {
@@ -224,6 +262,9 @@ fn apply_state(status: &mut PlaybackStatus, state: SdkState) {
     status.duration_ms = state.duration_ms.min(MAX_POSITION_MS);
     status.position_ms = state.position_ms.min(status.duration_ms);
     status.updated_at_ms = now_ms();
+    status.shuffle = state.shuffle;
+    status.repeat = state.repeat;
+    status.disallows = state.disallows;
     status.now_playing = state.track.and_then(|track| {
         let item = link::parse(&track.uri)?;
         if !matches!(item.kind, Kind::Track | Kind::Episode) {
@@ -240,6 +281,9 @@ fn apply_state(status: &mut PlaybackStatus, state: SdkState) {
                 .collect(),
             album: clip(&track.album, MAX_TEXT),
             spotify_url: Some(item.page()),
+            image_url: track
+                .image_url
+                .filter(|url| url.len() <= 512 && is_allowed_image(url)),
         })
     });
 }
@@ -291,7 +335,7 @@ fn csp_origin(blocked: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ora_types::SdkTrack;
+    use ora_types::{Disallows, RepeatMode, SdkTrack};
 
     fn id() -> String {
         "AbCd0123456789".chars().chain("xyzXYZ01".chars()).collect()
@@ -321,7 +365,14 @@ mod tests {
                     name: name.into(),
                     artists: vec!["Artist".into(), "  ".into()],
                     album: "Album".into(),
+                    image_url: Some("https://i.scdn.co/image/album".into()),
                 }),
+                shuffle: true,
+                repeat: RepeatMode::Context,
+                disallows: Disallows {
+                    seek: true,
+                    ..Disallows::default()
+                },
             }),
         }
     }
@@ -371,6 +422,13 @@ mod tests {
             now.spotify_url,
             Some(format!("https://open.spotify.com/track/{}", id()))
         );
+        assert_eq!(
+            now.image_url.as_deref(),
+            Some("https://i.scdn.co/image/album")
+        );
+        assert!(status.shuffle);
+        assert_eq!(status.repeat, RepeatMode::Context);
+        assert!(status.disallows.seek && !status.disallows.next);
 
         playback.apply(SdkEvent::State { state: None });
         let status = playback.status();
@@ -425,6 +483,30 @@ mod tests {
             playback.status().csp_blocks,
             ["script-src-elem https://cdn.example", "script-src inline"]
         );
+    }
+
+    #[test]
+    fn artwork_is_kept_only_from_the_allowed_image_host() {
+        let playback = Playback::default();
+        ready(&playback);
+        for url in [
+            "https://mosaic.scdn.co/640/x",
+            "http://i.scdn.co/image/x",
+            "https://i.scdn.co.example/image/x",
+        ] {
+            let mut event = state(format!("spotify:track:{}", id()), "Song");
+            if let SdkEvent::State {
+                state: Some(state), ..
+            } = &mut event
+            {
+                if let Some(track) = &mut state.track {
+                    track.image_url = Some(url.into());
+                }
+            }
+            playback.apply(event);
+            let now = playback.status().now_playing.unwrap();
+            assert_eq!(now.image_url, None, "{url}");
+        }
     }
 
     #[test]

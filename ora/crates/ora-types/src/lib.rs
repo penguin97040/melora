@@ -10,6 +10,6 @@ pub use auth::{AuthState, Profile, Status};
 pub use error::{ForbiddenHint, OraError, SignInFailure};
 pub use features::Feature;
 pub use playback::{
-    NowPlaying, PlaybackIssue, PlaybackStatus, PlayerCommand, Probe, SdkErrorKind, SdkEvent,
-    SdkState, SdkTrack, Tier,
+    Disallows, NowPlaying, PlaybackIssue, PlaybackStatus, PlayerCommand, Probe, RepeatMode,
+    SdkErrorKind, SdkEvent, SdkState, SdkTrack, Tier,
 };

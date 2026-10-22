@@ -51,6 +51,33 @@ pub struct SdkTrack {
     pub name: String,
     pub artists: Vec<String>,
     pub album: String,
+    /// The album image the bridge picked (closest to 300 px wide), if any.
+    #[serde(default)]
+    pub image_url: Option<String>,
+}
+
+/// The SDK's `repeat_mode`: 0, 1 and 2.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    Context,
+    Track,
+}
+
+/// The SDK's `disallows`: `true` means Spotify doesn't permit that control right now (for
+/// example while an advert plays), so clients disable it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct Disallows {
+    pub pause: bool,
+    pub resume: bool,
+    pub next: bool,
+    pub previous: bool,
+    pub seek: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +88,12 @@ pub struct SdkState {
     pub position_ms: u64,
     pub duration_ms: u64,
     pub track: Option<SdkTrack>,
+    #[serde(default)]
+    pub shuffle: bool,
+    #[serde(default)]
+    pub repeat: RepeatMode,
+    #[serde(default)]
+    pub disallows: Disallows,
 }
 
 /// Bridge → Rust (`plugin:ora|sdk_event`).
@@ -112,6 +145,13 @@ pub enum PlayerCommand {
     SetVolume {
         volume: f64,
     },
+    /// Run through the Web API: the SDK has no shuffle or repeat methods.
+    SetShuffle {
+        state: bool,
+    },
+    SetRepeat {
+        mode: RepeatMode,
+    },
     Disconnect,
 }
 
@@ -141,6 +181,8 @@ pub struct NowPlaying {
     pub album: String,
     /// `https://open.spotify.com/…` for "Open in Spotify".
     pub spotify_url: Option<String>,
+    /// Album artwork, only from the image host clients allow in their CSP.
+    pub image_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +206,9 @@ pub struct PlaybackStatus {
     pub duration_ms: u64,
     /// Milliseconds since the Unix epoch when `positionMs` was reported.
     pub updated_at_ms: u64,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
+    pub disallows: Disallows,
     pub issue: Option<PlaybackIssue>,
     pub probe: Option<Probe>,
     /// `directive origin` pairs the CSP blocked, at most ten.

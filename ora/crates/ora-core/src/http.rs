@@ -100,6 +100,10 @@ impl HttpClient for ReqwestClient {
         }
         if let Some(json) = &request.json {
             builder = builder.json(json);
+        } else if request.form.is_empty() && request.method != Method::Get {
+            // An explicit empty body sends `Content-Length: 0`; Spotify can refuse a
+            // length-less PUT (for example shuffle and repeat, which take no body).
+            builder = builder.body(Vec::<u8>::new());
         }
         let mut response = builder.send().await.map_err(|error| {
             if error.is_connect() {

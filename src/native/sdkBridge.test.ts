@@ -155,13 +155,23 @@ describe('sdk-bridge', () => {
     player.emit('player_state_changed', {
       paused: false,
       position: 1200.4,
-      duration: 180000,
+      shuffle: true,
+      repeat_mode: 1,
+      disallows: { seeking: true, skipping_prev: false },
       track_window: {
         current_track: {
           uri: 'spotify:track:x',
           name: 'Song',
+          duration_ms: 180000,
           artists: [{ name: 'Artist' }],
-          album: { name: 'Album' },
+          album: {
+            name: 'Album',
+            images: [
+              { url: 'https://i.scdn.co/image/large', width: 640 },
+              { url: 'https://i.scdn.co/image/medium', width: 300 },
+              { url: 'https://i.scdn.co/image/small', width: 64 },
+            ],
+          },
         },
       },
     });
@@ -181,6 +191,16 @@ describe('sdk-bridge', () => {
             name: 'Song',
             artists: ['Artist'],
             album: 'Album',
+            imageUrl: 'https://i.scdn.co/image/medium',
+          },
+          shuffle: true,
+          repeat: 'context',
+          disallows: {
+            pause: false,
+            resume: false,
+            next: false,
+            previous: false,
+            seek: true,
           },
         },
       },

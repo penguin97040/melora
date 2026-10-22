@@ -297,7 +297,8 @@ async fn play_here<R: Runtime>(
     ora.0.play_here(link.as_deref()).await
 }
 
-/// Play/pause, seek, next, previous, volume and disconnect, run by the SDK on this device.
+/// Play/pause, seek, next, previous, volume and disconnect run in the SDK on this device;
+/// shuffle and repeat go through the Web API.
 #[tauri::command]
 async fn playback_command<R: Runtime>(
     window: Window<R>,
@@ -306,8 +307,10 @@ async fn playback_command<R: Runtime>(
     command: PlayerCommand,
 ) -> Result<(), OraError> {
     main_only(&window)?;
-    let command = ora.0.playback().command(command)?;
-    bridge.send(command)
+    match ora.0.player_command(command).await? {
+        Some(command) => bridge.send(command),
+        None => Ok(()),
+    }
 }
 
 /// Opens an `https://open.spotify.com/...` page in the system browser. Nothing else.

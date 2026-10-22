@@ -6,7 +6,7 @@ use crate::{
     link::SpotifyUri,
     secret::Secret,
 };
-use ora_types::{ForbiddenHint, OraError, Profile};
+use ora_types::{ForbiddenHint, OraError, Profile, RepeatMode};
 use serde::Deserialize;
 
 pub const API_BASE: &str = "https://api.spotify.com/v1";
@@ -136,7 +136,7 @@ async fn player_put<H: HttpClient>(
     http: &H,
     access: &Secret,
     url: String,
-    body: serde_json::Value,
+    body: Option<serde_json::Value>,
 ) -> Result<(), ApiError> {
     let response = http
         .send(Request {
@@ -144,7 +144,7 @@ async fn player_put<H: HttpClient>(
             url,
             bearer: Some(access.clone()),
             form: Vec::new(),
-            json: Some(body),
+            json: body,
         })
         .await
         .map_err(|e| ApiError::Other(transport_error(e)))?;
@@ -164,7 +164,7 @@ pub async fn transfer<H: HttpClient>(
     play: bool,
 ) -> Result<(), ApiError> {
     let body = serde_json::json!({ "device_ids": [device_id], "play": play });
-    player_put(http, access, format!("{API_BASE}/me/player"), body).await
+    player_put(http, access, format!("{API_BASE}/me/player"), Some(body)).await
 }
 
 /// `PUT /me/player/play?device_id=…`: starts an album, artist, playlist or show as a context,
@@ -180,12 +180,48 @@ pub async fn play<H: HttpClient>(
     } else {
         serde_json::json!({ "uris": [target.uri()] })
     };
-    let device: String = url::form_urlencoded::byte_serialize(device_id.as_bytes()).collect();
-    let url = format!("{API_BASE}/me/player/play?device_id={device}");
-    player_put(http, access, url, body).await
+    let url = format!("{API_BASE}/me/player/play?device_id={}", encode(device_id));
+    player_put(http, access, url, Some(body)).await
 }
 
-fn is_allowed_image(url: &str) -> bool {
+/// `PUT /me/player/shuffle?state=…&device_id=…` (no body).
+pub async fn shuffle<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    state: bool,
+) -> Result<(), ApiError> {
+    let url = format!(
+        "{API_BASE}/me/player/shuffle?state={state}&device_id={}",
+        encode(device_id)
+    );
+    player_put(http, access, url, None).await
+}
+
+/// `PUT /me/player/repeat?state=off|context|track&device_id=…` (no body).
+pub async fn repeat<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    mode: RepeatMode,
+) -> Result<(), ApiError> {
+    let state = match mode {
+        RepeatMode::Off => "off",
+        RepeatMode::Context => "context",
+        RepeatMode::Track => "track",
+    };
+    let url = format!(
+        "{API_BASE}/me/player/repeat?state={state}&device_id={}",
+        encode(device_id)
+    );
+    player_put(http, access, url, None).await
+}
+
+fn encode(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+pub(crate) fn is_allowed_image(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|url| {
         url.scheme() == "https"
             && url.host_str() == Some(IMAGE_HOST)
@@ -293,6 +329,30 @@ mod tests {
             seen[2].json,
             Some(serde_json::json!({"uris": [format!("spotify:track:{id}")]}))
         );
+    }
+
+    #[tokio::test]
+    async fn shuffle_and_repeat_target_the_device_without_a_body() {
+        let http = MockHttp::default();
+        http.push(204, "");
+        http.push(204, "");
+        let access = Secret::new("a");
+        shuffle(&http, &access, "device1", true).await.unwrap();
+        repeat(&http, &access, "device1", RepeatMode::Context)
+            .await
+            .unwrap();
+        let seen = http.requests();
+        assert_eq!(
+            seen[0].url,
+            "https://api.spotify.com/v1/me/player/shuffle?state=true&device_id=device1"
+        );
+        assert_eq!(
+            seen[1].url,
+            "https://api.spotify.com/v1/me/player/repeat?state=context&device_id=device1"
+        );
+        assert!(seen
+            .iter()
+            .all(|r| r.method == Method::Put && r.json.is_none() && r.form.is_empty()));
     }
 
     #[tokio::test]

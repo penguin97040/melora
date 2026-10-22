@@ -119,22 +119,46 @@ export function install(options) {
     return loading;
   }
 
+  // The album image closest to 300 px wide; entries may carry only a URL.
+  function pickImage(images) {
+    const list = Array.isArray(images) ? images.filter((i) => i?.url) : [];
+    const sized = list.filter((i) => Number(i.width) > 0);
+    const best = sized.length
+      ? sized.reduce((a, b) =>
+          Math.abs(b.width - 300) < Math.abs(a.width - 300) ? b : a,
+        )
+      : list[0];
+    return best ? String(best.url) : null;
+  }
+
   function reduce(state) {
     if (!state) return null;
     const track = state.track_window?.current_track;
     const whole = (value) => Math.max(0, Math.round(Number(value) || 0));
+    const disallows = state.disallows ?? {};
     return {
       paused: Boolean(state.paused),
       positionMs: whole(state.position),
-      durationMs: whole(state.duration),
+      // `duration` isn't in the documented state object; the track always has `duration_ms`.
+      durationMs: whole(state.duration ?? track?.duration_ms),
       track: track
         ? {
             uri: String(track.uri ?? ''),
             name: String(track.name ?? ''),
             artists: (track.artists ?? []).map((a) => String(a?.name ?? '')),
             album: String(track.album?.name ?? ''),
+            imageUrl: pickImage(track.album?.images),
           }
         : null,
+      shuffle: Boolean(state.shuffle),
+      repeat: ['off', 'context', 'track'][state.repeat_mode] ?? 'off',
+      disallows: {
+        pause: Boolean(disallows.pausing),
+        resume: Boolean(disallows.resuming),
+        next: Boolean(disallows.skipping_next),
+        previous: Boolean(disallows.skipping_prev),
+        seek: Boolean(disallows.seeking),
+      },
     };
   }
 
