@@ -10,6 +10,7 @@ const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 pub enum Method {
     Get,
     Post,
+    Put,
 }
 
 pub struct Request {
@@ -18,6 +19,8 @@ pub struct Request {
     pub url: String,
     pub bearer: Option<Secret>,
     pub form: Vec<(&'static str, Secret)>,
+    /// A JSON body (Web API player commands). Never holds a secret.
+    pub json: Option<serde_json::Value>,
 }
 
 impl fmt::Debug for Request {
@@ -85,6 +88,7 @@ impl HttpClient for ReqwestClient {
         let mut builder = match request.method {
             Method::Get => self.client.get(&request.url),
             Method::Post => self.client.post(&request.url),
+            Method::Put => self.client.put(&request.url),
         };
         if let Some(bearer) = &request.bearer {
             builder = builder.bearer_auth(bearer.expose());
@@ -93,6 +97,9 @@ impl HttpClient for ReqwestClient {
             let pairs: Vec<(&str, &str)> =
                 request.form.iter().map(|(k, v)| (*k, v.expose())).collect();
             builder = builder.form(&pairs);
+        }
+        if let Some(json) = &request.json {
+            builder = builder.json(json);
         }
         let mut response = builder.send().await.map_err(|error| {
             if error.is_connect() {
@@ -145,6 +152,7 @@ pub mod mock {
         pub had_bearer: bool,
         /// Form keys and values, for assertions in tests only.
         pub form: Vec<(String, String)>,
+        pub json: Option<serde_json::Value>,
     }
 
     #[derive(Clone, Default)]
@@ -188,6 +196,7 @@ pub mod mock {
                     .iter()
                     .map(|(k, v)| ((*k).to_owned(), v.expose().to_owned()))
                     .collect(),
+                json: request.json.clone(),
             });
             let delay = *self.delay.lock().unwrap();
             if let Some(delay) = delay {

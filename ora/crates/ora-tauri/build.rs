@@ -8,6 +8,12 @@ const COMMANDS: &[&str] = &[
     "profile",
     "subscribe",
     "open_in_spotify",
+    "access_token",
+    "sdk_event",
+    "sdk_attach",
+    "subscribe_playback",
+    "play_here",
+    "playback_command",
 ];
 
 fn main() {

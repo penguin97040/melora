@@ -17,12 +17,16 @@ use crate::{
     http::HttpClient,
     loopback::{registered_redirect_uri, Callback, CallbackError},
     oauth::{self, TokenError},
-    pkce, scopes_for,
+    pkce,
+    playback::Playback,
+    scopes_for,
     secret::Secret,
     store::{CredentialStore, StoreError, REFRESH_TOKEN, SESSION},
 };
 use ora_types::{AuthState, Feature, OraError, Profile, SignInFailure, Status};
 use std::{
+    collections::BTreeSet,
+    future::Future,
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -51,13 +55,16 @@ struct Session {
     access: Option<(Secret, Instant)>,
     profile: Option<Profile>,
     session_only: bool,
+    /// The scopes Spotify granted, from the token response or the saved session metadata.
+    scopes: BTreeSet<String>,
 }
 
 enum Auth {
     NotConfigured,
     SignedOut,
     SigningIn,
-    SignedIn(Session),
+    /// Boxed: a session is much larger than the other states.
+    SignedIn(Box<Session>),
     SessionExpired,
 }
 
@@ -88,6 +95,7 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
     /// Serialises credential-store writes and deletions (see the module rules).
     store_gate: tokio::sync::Mutex<()>,
     status: watch::Sender<Status>,
+    playback: Playback,
 }
 
 impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
@@ -120,7 +128,17 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             refresh_gate: tokio::sync::Mutex::new(()),
             store_gate: tokio::sync::Mutex::new(()),
             status,
+            playback: Playback::default(),
         }
+    }
+
+    /// Embedded playback state, fed by the SDK bridge.
+    pub fn playback(&self) -> &Playback {
+        &self.playback
+    }
+
+    pub(crate) fn http(&self) -> &H {
+        &self.http
     }
 
     pub fn status(&self) -> Status {
@@ -195,17 +213,19 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             .await;
         match saved {
             Ok((Some(_), Some(metadata))) if !issued_to(&metadata, &client_id) => {}
-            Ok((Some(refresh), _)) => {
+            Ok((Some(refresh), metadata)) => {
+                let scopes = metadata.as_ref().map(saved_scopes).unwrap_or_default();
                 let restored = self.update(|inner, ora| {
                     let current = ora.current_generation() == generation
                         && matches!(inner.auth, Auth::SignedOut);
                     if current {
-                        inner.auth = Auth::SignedIn(Session {
+                        inner.auth = Auth::SignedIn(Box::new(Session {
                             refresh,
                             access: None,
                             profile: None,
                             session_only: false,
-                        });
+                            scopes,
+                        }));
                     }
                     current
                 });
@@ -218,7 +238,11 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         }
     }
 
-    pub async fn sign_in(&self) -> Result<Status, OraError> {
+    /// Signs in, asking for what sign-in and the profile need, everything the current sign-in
+    /// already has, and the scopes of `extra` (for example `EmbeddedPlayback`). Signing in again
+    /// while signed in is how a feature gets Spotify's extra permission; cancelling keeps the
+    /// existing sign-in.
+    pub async fn sign_in(&self, extra: Option<Feature>) -> Result<Status, OraError> {
         let started = self.update(|inner, ora| {
             let client_id = inner.client_id.clone().ok_or(OraError::NotConfigured)?;
             if matches!(inner.auth, Auth::SigningIn) {
@@ -226,15 +250,23 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 // port can't be bound twice; Cancel ends it.
                 return Ok(None);
             }
+            let mut scopes: BTreeSet<String> = scopes_for(&SIGN_IN_FEATURES)
+                .into_iter()
+                .chain(extra.iter().flat_map(|feature| feature.scopes()).copied())
+                .map(str::to_owned)
+                .collect();
+            if let Auth::SignedIn(session) = &inner.auth {
+                scopes.extend(session.scopes.iter().cloned());
+            }
             let previous = std::mem::replace(&mut inner.auth, Auth::SigningIn);
             inner.before_sign_in = Some(previous);
             inner.last_error = None;
-            Ok::<_, OraError>(Some((client_id, ora.current_generation())))
+            Ok::<_, OraError>(Some((client_id, scopes, ora.current_generation())))
         })?;
-        let Some((client_id, generation)) = started else {
+        let Some((client_id, scopes, generation)) = started else {
             return Ok(self.status());
         };
-        match self.sign_in_flow(&client_id, generation).await {
+        match self.sign_in_flow(&client_id, &scopes, generation).await {
             Ok(()) => {
                 let _ = self.load_profile().await;
                 Ok(self.status())
@@ -253,7 +285,12 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         }
     }
 
-    async fn sign_in_flow(&self, client_id: &ClientId, generation: u64) -> Result<(), OraError> {
+    async fn sign_in_flow(
+        &self,
+        client_id: &ClientId,
+        scopes: &BTreeSet<String>,
+        generation: u64,
+    ) -> Result<(), OraError> {
         let pkce = pkce::generate().map_err(|_| OraError::Unsupported)?;
         let state = pkce::state().map_err(|_| OraError::Unsupported)?;
         let callback =
@@ -271,7 +308,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         let url = oauth::authorize_url(
             client_id,
             &redirect_uri,
-            &scopes_for(&SIGN_IN_FEATURES),
+            &scopes.iter().map(String::as_str).collect::<Vec<_>>(),
             &state,
             &pkce.challenge,
         );
@@ -335,12 +372,13 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             }
             inner.before_sign_in = None;
             inner.last_error = saved.err().map(|_| OraError::StorageUnavailable);
-            inner.auth = Auth::SignedIn(Session {
+            inner.auth = Auth::SignedIn(Box::new(Session {
                 refresh,
                 access: Some((tokens.access, tokens.expires_at)),
                 profile: None,
                 session_only: saved.is_err(),
-            });
+                scopes: scope_set(&tokens.scope),
+            }));
             true
         });
         if !accepted {
@@ -416,11 +454,11 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 
     pub async fn profile(&self) -> Result<Option<Profile>, OraError> {
         match &self.lock().auth {
-            Auth::SignedIn(Session {
-                profile: Some(profile),
-                ..
-            }) => return Ok(Some(profile.clone())),
-            Auth::SignedIn(_) => {}
+            Auth::SignedIn(session) => {
+                if let Some(profile) = &session.profile {
+                    return Ok(Some(profile.clone()));
+                }
+            }
             _ => return Ok(None),
         }
         self.load_profile().await
@@ -428,30 +466,56 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 
     async fn load_profile(&self) -> Result<Option<Profile>, OraError> {
         let generation = self.current_generation();
-        let access = self.fresh_access().await.map_err(|e| self.record(e))?;
-        let result = match api::me(&self.http, &access).await {
-            Err(ApiError::Unauthorized) => {
-                let replay = self
-                    .forced_refresh(&access)
-                    .await
-                    .map_err(|e| self.record(e))?;
-                api::me(&self.http, &replay).await
+        let profile = self
+            .authorised(|access| async move { api::me(&self.http, &access).await })
+            .await
+            .map_err(|e| self.record(e))?;
+        self.update(|inner, ora| {
+            if ora.current_generation() == generation {
+                if let Auth::SignedIn(session) = &mut inner.auth {
+                    session.profile = Some(profile.clone());
+                }
             }
+        });
+        Ok(Some(profile))
+    }
+
+    /// Runs a Web API call with a fresh token. A 401 refreshes once and replays once; a second
+    /// 401 means Spotify no longer accepts the sign-in.
+    pub(crate) async fn authorised<T, F, Fut>(&self, call: F) -> Result<T, OraError>
+    where
+        F: Fn(Secret) -> Fut,
+        Fut: Future<Output = Result<T, ApiError>>,
+    {
+        let generation = self.current_generation();
+        let access = self.fresh_access().await?;
+        let result = match call(access.clone()).await {
+            Err(ApiError::Unauthorized) => call(self.forced_refresh(&access).await?).await,
             other => other,
         };
         match result {
-            Ok(profile) => {
-                self.update(|inner, ora| {
-                    if ora.current_generation() == generation {
-                        if let Auth::SignedIn(session) = &mut inner.auth {
-                            session.profile = Some(profile.clone());
-                        }
-                    }
-                });
-                Ok(Some(profile))
-            }
+            Ok(value) => Ok(value),
             Err(ApiError::Unauthorized) => Err(self.expire(generation).await),
-            Err(ApiError::Other(error)) => Err(self.record(error)),
+            Err(ApiError::Other(error)) => Err(error),
+        }
+    }
+
+    /// Whether the current sign-in covers `feature`'s scopes; `NeedsScope` asks for `sign_in`
+    /// with that feature.
+    pub fn require(&self, feature: Feature) -> Result<(), OraError> {
+        match &self.lock().auth {
+            Auth::SignedIn(session)
+                if feature
+                    .scopes()
+                    .iter()
+                    .all(|scope| session.scopes.contains(*scope)) =>
+            {
+                Ok(())
+            }
+            Auth::SignedIn(_) => Err(OraError::NeedsScope { feature }),
+            Auth::SessionExpired => Err(OraError::SessionExpired),
+            Auth::NotConfigured => Err(OraError::NotConfigured),
+            Auth::SignedOut | Auth::SigningIn => Err(OraError::SignedOut),
         }
     }
 
@@ -546,6 +610,9 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 if let Some(rotated) = tokens.refresh {
                     session.refresh = rotated;
                 }
+                if !tokens.scope.trim().is_empty() {
+                    session.scopes = scope_set(&tokens.scope);
+                }
                 if !stored_ok {
                     session.session_only = true;
                     inner.last_error = Some(OraError::StorageUnavailable);
@@ -588,6 +655,7 @@ fn snapshot(inner: &Inner) -> Status {
             Auth::SignedIn(session) => AuthState::SignedIn {
                 profile: session.profile.clone(),
                 session_only: session.session_only,
+                granted: granted_features(&session.scopes),
             },
             Auth::SessionExpired => AuthState::SessionExpired,
         },
@@ -603,6 +671,28 @@ fn forget<S: CredentialStore>(store: &S) -> Result<(), StoreError> {
     let first = store.delete(REFRESH_TOKEN);
     let second = store.delete(SESSION);
     first.and(second)
+}
+
+/// The scopes in a space-separated `scope` string, as Spotify sends and the metadata stores them.
+fn scope_set(scope: &str) -> BTreeSet<String> {
+    scope.split_whitespace().map(str::to_owned).collect()
+}
+
+/// The scopes saved with a sign-in. Missing or unreadable metadata grants nothing extra, so a
+/// feature that needs more simply asks again.
+fn saved_scopes(metadata: &Secret) -> BTreeSet<String> {
+    serde_json::from_str::<serde_json::Value>(metadata.expose())
+        .ok()
+        .and_then(|value| value["scopes"].as_str().map(scope_set))
+        .unwrap_or_default()
+}
+
+/// Every feature whose scopes are all in `scopes`.
+fn granted_features(scopes: &BTreeSet<String>) -> Vec<Feature> {
+    Feature::ALL
+        .into_iter()
+        .filter(|feature| feature.scopes().iter().all(|scope| scopes.contains(*scope)))
+        .collect()
 }
 
 /// `{authorizedAt, scopes, accountId, clientId}`. Spotify doesn't reveal when a refresh token

@@ -1,6 +1,6 @@
 //! Sign-in state as the UI sees it. Nothing here ever holds a token or a verifier.
 
-use crate::error::OraError;
+use crate::{error::OraError, features::Feature};
 use serde::{Deserialize, Serialize};
 
 /// The signed-in Spotify account, mapped from `GET /me`.
@@ -33,6 +33,9 @@ pub enum AuthState {
         /// The OS credential store was unavailable, so the session ends when the app closes.
         #[serde(rename = "sessionOnly")]
         session_only: bool,
+        /// Features whose scopes this sign-in covers. Others need `sign_in` with that feature,
+        /// which asks Spotify for the extra permission.
+        granted: Vec<Feature>,
     },
     /// Spotify no longer accepts the saved sign-in (for example after six months).
     SessionExpired,

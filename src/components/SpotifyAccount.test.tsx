@@ -109,7 +109,12 @@ describe('Spotify account settings', () => {
   it('shows the signed-in account with Open in Spotify and Sign out', async () => {
     render(
       <SpotifyAccount
-        status={status({ kind: 'signedIn', profile, sessionOnly: false })}
+        status={status({
+          kind: 'signedIn',
+          profile,
+          sessionOnly: false,
+          granted: [],
+        })}
       />,
     );
     expect(screen.getByRole('status')).toHaveTextContent('Signed in as Kiri.');
@@ -127,7 +132,7 @@ describe('Spotify account settings', () => {
     render(
       <SpotifyAccount
         status={status(
-          { kind: 'signedIn', profile, sessionOnly: true },
+          { kind: 'signedIn', profile, sessionOnly: true, granted: [] },
           { lastError: { kind: 'storageUnavailable' } },
         )}
       />,
@@ -142,7 +147,7 @@ describe('Spotify account settings', () => {
     render(
       <SpotifyAccount
         status={status(
-          { kind: 'signedIn', profile: null, sessionOnly: false },
+          { kind: 'signedIn', profile: null, sessionOnly: false, granted: [] },
           { lastError: { kind: 'forbidden', hint: 'Allowlist' } },
         )}
       />,
@@ -216,7 +221,7 @@ describe('Spotify account settings', () => {
   it('offers to load a profile that failed to load', async () => {
     vi.mocked(loadSpotifyProfile).mockResolvedValue(profile);
     const offline = status(
-      { kind: 'signedIn', profile: null, sessionOnly: false },
+      { kind: 'signedIn', profile: null, sessionOnly: false, granted: [] },
       { lastError: { kind: 'offline' } },
     );
     render(<SpotifyAccount status={offline} />);
@@ -234,7 +239,7 @@ describe('Spotify account settings', () => {
     render(
       <SpotifyAccount
         status={status(
-          { kind: 'signedIn', profile: null, sessionOnly: true },
+          { kind: 'signedIn', profile: null, sessionOnly: true, granted: [] },
           { lastError: { kind: 'storageUnavailable' } },
         )}
       />,
@@ -250,7 +255,7 @@ describe('Spotify account settings', () => {
   it('retries a missing profile by itself only after connection problems', () => {
     const missing = (lastError: SpotifyStatus['lastError']) =>
       status(
-        { kind: 'signedIn', profile: null, sessionOnly: false },
+        { kind: 'signedIn', profile: null, sessionOnly: false, granted: [] },
         { lastError },
       );
     expect(profileRetryable(missing({ kind: 'offline' }))).toBe(true);
@@ -265,7 +270,7 @@ describe('Spotify account settings', () => {
     expect(
       profileRetryable(
         status(
-          { kind: 'signedIn', profile, sessionOnly: false },
+          { kind: 'signedIn', profile, sessionOnly: false, granted: [] },
           { lastError: { kind: 'offline' } },
         ),
       ),

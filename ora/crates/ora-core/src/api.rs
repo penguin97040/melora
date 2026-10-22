@@ -3,6 +3,7 @@
 
 use crate::{
     http::{HttpClient, Method, Request, Response, TransportError},
+    link::SpotifyUri,
     secret::Secret,
 };
 use ora_types::{ForbiddenHint, OraError, Profile};
@@ -91,6 +92,7 @@ pub async fn me<H: HttpClient>(http: &H, access: &Secret) -> Result<Profile, Api
             url: format!("{API_BASE}/me"),
             bearer: Some(access.clone()),
             form: Vec::new(),
+            json: None,
         })
         .await
         .map_err(|e| ApiError::Other(transport_error(e)))?;
@@ -118,6 +120,69 @@ pub async fn me<H: HttpClient>(http: &H, access: &Secret) -> Result<Profile, Api
         image_url,
         spotify_url,
     })
+}
+
+/// Player commands: 403 means Premium is missing or the action is restricted, and 404 means
+/// Spotify knows no active device. Neither is retried.
+fn player_error(response: &Response) -> ApiError {
+    if response.status == 404 {
+        ApiError::Other(OraError::NoActiveDevice)
+    } else {
+        error_for(response, ForbiddenHint::Premium)
+    }
+}
+
+async fn player_put<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    url: String,
+    body: serde_json::Value,
+) -> Result<(), ApiError> {
+    let response = http
+        .send(Request {
+            method: Method::Put,
+            url,
+            bearer: Some(access.clone()),
+            form: Vec::new(),
+            json: Some(body),
+        })
+        .await
+        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    if matches!(response.status, 200 | 202 | 204) {
+        Ok(())
+    } else {
+        Err(player_error(&response))
+    }
+}
+
+/// `PUT /me/player`: makes `device_id` the active device. With `play`, playback continues
+/// there; otherwise it keeps its current paused or playing state.
+pub async fn transfer<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    play: bool,
+) -> Result<(), ApiError> {
+    let body = serde_json::json!({ "device_ids": [device_id], "play": play });
+    player_put(http, access, format!("{API_BASE}/me/player"), body).await
+}
+
+/// `PUT /me/player/play?device_id=…`: starts an album, artist, playlist or show as a context,
+/// or a single track or episode.
+pub async fn play<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    target: &SpotifyUri,
+) -> Result<(), ApiError> {
+    let body = if target.is_context() {
+        serde_json::json!({ "context_uri": target.uri() })
+    } else {
+        serde_json::json!({ "uris": [target.uri()] })
+    };
+    let device: String = url::form_urlencoded::byte_serialize(device_id.as_bytes()).collect();
+    let url = format!("{API_BASE}/me/player/play?device_id={device}");
+    player_put(http, access, url, body).await
 }
 
 fn is_allowed_image(url: &str) -> bool {
@@ -193,6 +258,65 @@ mod tests {
             profile.image_url.as_deref(),
             Some("https://i.scdn.co/image/kept")
         );
+    }
+
+    #[tokio::test]
+    async fn transfer_and_play_send_the_documented_requests() {
+        let http = MockHttp::default();
+        http.push(204, "");
+        http.push(202, "");
+        http.push(204, "");
+        let access = Secret::new("a");
+        transfer(&http, &access, "device1", true).await.unwrap();
+        let id: String = "AbCd0123456789".chars().chain("xyzXYZ01".chars()).collect();
+        let album = crate::link::parse(&format!("spotify:album:{id}")).unwrap();
+        play(&http, &access, "device 1", &album).await.unwrap();
+        let track = crate::link::parse(&format!("spotify:track:{id}")).unwrap();
+        play(&http, &access, "device1", &track).await.unwrap();
+
+        let seen = http.requests();
+        assert!(seen.iter().all(|r| r.method == Method::Put && r.had_bearer));
+        assert_eq!(seen[0].url, "https://api.spotify.com/v1/me/player");
+        assert_eq!(
+            seen[0].json,
+            Some(serde_json::json!({"device_ids": ["device1"], "play": true}))
+        );
+        assert_eq!(
+            seen[1].url,
+            "https://api.spotify.com/v1/me/player/play?device_id=device+1"
+        );
+        assert_eq!(
+            seen[1].json,
+            Some(serde_json::json!({"context_uri": format!("spotify:album:{id}")}))
+        );
+        assert_eq!(
+            seen[2].json,
+            Some(serde_json::json!({"uris": [format!("spotify:track:{id}")]}))
+        );
+    }
+
+    #[tokio::test]
+    async fn player_refusals_point_at_premium_or_the_device() {
+        let http = MockHttp::default();
+        http.push(403, "");
+        http.push(404, "");
+        http.push(401, "");
+        let access = Secret::new("a");
+        assert_eq!(
+            transfer(&http, &access, "d", false).await.err(),
+            Some(ApiError::Other(OraError::Forbidden {
+                hint: ForbiddenHint::Premium
+            }))
+        );
+        assert_eq!(
+            transfer(&http, &access, "d", false).await.err(),
+            Some(ApiError::Other(OraError::NoActiveDevice))
+        );
+        assert_eq!(
+            transfer(&http, &access, "d", false).await.err(),
+            Some(ApiError::Unauthorized)
+        );
+        assert_eq!(http.requests().len(), 3);
     }
 
     #[tokio::test]

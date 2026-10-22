@@ -128,13 +128,27 @@ fn harness(label: &str, user: User) -> Harness {
 // Fixture tokens are short and their JSON keys are assembled, so no source line looks like
 // a real credential to the publication gate.
 fn tokens_json(access: &str, refresh: Option<&str>) -> String {
+    tokens_with_scope(access, refresh, "user-read-private")
+}
+
+fn tokens_with_scope(access: &str, refresh: Option<&str>, scope: &str) -> String {
     let refresh = refresh
         .map(|r| format!(r#","refresh_{}":"{r}""#, "token"))
         .unwrap_or_default();
     format!(
-        r#"{{"access_{}":"{access}","token_type":"Bearer","expires_in":3600,"scope":"user-read-private"{refresh}}}"#,
+        r#"{{"access_{}":"{access}","token_type":"Bearer","expires_in":3600,"scope":"{scope}"{refresh}}}"#,
         "token"
     )
+}
+
+const PLAYBACK_SCOPES: &str = "streaming user-modify-playback-state user-read-currently-playing \
+    user-read-playback-state user-read-private";
+
+fn granted(status: &Status) -> Vec<Feature> {
+    match &status.auth {
+        AuthState::SignedIn { granted, .. } => granted.clone(),
+        _ => Vec::new(),
+    }
 }
 
 const ME: &str = r#"{"account_id":"acct1","id":"user1","display_name":"Kiri",
@@ -158,7 +172,7 @@ async fn sign_in_saves_the_refresh_token_and_shows_the_profile() {
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
 
-    let status = h.ora.sign_in().await.unwrap();
+    let status = h.ora.sign_in(None).await.unwrap();
 
     assert_eq!(
         signed_in_profile(&status).unwrap().display_name.as_deref(),
@@ -206,7 +220,7 @@ async fn relaunch_restores_the_session_and_sign_out_forgets_it() {
     let h = harness("relaunch", User::Approve);
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
-    h.ora.sign_in().await.unwrap();
+    h.ora.sign_in(None).await.unwrap();
 
     // A new process: same store and settings, nothing in memory.
     let relaunched = build(
@@ -244,7 +258,7 @@ async fn failed_deletion_is_reported_but_memory_is_cleared() {
     let h = harness("delete-failure", User::Approve);
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
-    h.ora.sign_in().await.unwrap();
+    h.ora.sign_in(None).await.unwrap();
     h.store.fail_deletes.store(true, Ordering::SeqCst);
 
     assert_eq!(
@@ -264,7 +278,7 @@ async fn unavailable_store_gives_a_visible_session_only_sign_in() {
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
 
-    let status = h.ora.sign_in().await.unwrap();
+    let status = h.ora.sign_in(None).await.unwrap();
 
     assert!(matches!(
         status.auth,
@@ -282,7 +296,7 @@ async fn signed_in_with_stale_access(label: &str) -> Harness {
     let h = harness(label, User::Approve);
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
-    h.ora.sign_in().await.unwrap();
+    h.ora.sign_in(None).await.unwrap();
     if let Auth::SignedIn(session) = &mut h.ora.lock().auth {
         session.access = Some((Secret::new("old"), Instant::now()));
     }
@@ -345,7 +359,7 @@ async fn unauthorised_profile_refreshes_and_replays_once() {
     h.http.push(401, "");
     h.http.push(200, &tokens_json("acc2", None));
     h.http.push(200, ME);
-    let status = h.ora.sign_in().await.unwrap();
+    let status = h.ora.sign_in(None).await.unwrap();
     assert!(signed_in_profile(&status).is_some());
     let urls: Vec<String> = h.http.requests().into_iter().map(|r| r.url).collect();
     assert_eq!(
@@ -366,7 +380,7 @@ async fn a_second_unauthorised_reply_expires_the_session() {
     h.http.push(401, "");
     h.http.push(200, &tokens_json("acc2", None));
     h.http.push(401, "");
-    h.ora.sign_in().await.unwrap();
+    h.ora.sign_in(None).await.unwrap();
     assert_eq!(h.ora.status().auth, AuthState::SessionExpired);
     assert_eq!(h.store.value(REFRESH_TOKEN), None);
     assert_eq!(h.http.requests().len(), 4);
@@ -377,7 +391,7 @@ async fn forbidden_profile_points_at_the_allowlist() {
     let h = harness("allowlist", User::Approve);
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(403, "");
-    let status = h.ora.sign_in().await.unwrap();
+    let status = h.ora.sign_in(None).await.unwrap();
     assert!(matches!(
         status.auth,
         AuthState::SignedIn { profile: None, .. }
@@ -394,7 +408,7 @@ async fn forbidden_profile_points_at_the_allowlist() {
 async fn sign_out_during_sign_in_cancels_it_and_saves_nothing() {
     let h = harness("logout-during-login", User::Ignore);
     let ora = Arc::clone(&h.ora);
-    let pending = tokio::spawn(async move { ora.sign_in().await });
+    let pending = tokio::spawn(async move { ora.sign_in(None).await });
     wait_for_signing_in(&h.ora).await;
 
     h.ora.sign_out().await.unwrap();
@@ -411,7 +425,7 @@ async fn sign_out_during_sign_in_cancels_it_and_saves_nothing() {
 async fn cancel_returns_to_the_previous_state_and_the_late_callback_is_refused() {
     let h = harness("cancel", User::Ignore);
     let ora = Arc::clone(&h.ora);
-    let pending = tokio::spawn(async move { ora.sign_in().await });
+    let pending = tokio::spawn(async move { ora.sign_in(None).await });
     wait_for_signing_in(&h.ora).await;
     let opened = h.browser.opened.lock().unwrap()[0].clone();
 
@@ -431,7 +445,7 @@ async fn cancel_returns_to_the_previous_state_and_the_late_callback_is_refused()
 #[tokio::test]
 async fn declining_on_spotify_is_a_quiet_cancel() {
     let h = harness("denied", User::Deny);
-    assert_eq!(h.ora.sign_in().await.err(), Some(OraError::Cancelled));
+    assert_eq!(h.ora.sign_in(None).await.err(), Some(OraError::Cancelled));
     let status = h.ora.status();
     assert_eq!(status.auth, AuthState::SignedOut);
     assert_eq!(status.last_error, None);
@@ -460,7 +474,7 @@ async fn sign_in_times_out_visibly() {
     let expected = OraError::SignIn {
         reason: SignInFailure::TimedOut,
     };
-    assert_eq!(ora.sign_in().await.err(), Some(expected.clone()));
+    assert_eq!(ora.sign_in(None).await.err(), Some(expected.clone()));
     assert_eq!(ora.status().last_error, Some(expected));
     assert_eq!(ora.status().auth, AuthState::SignedOut);
     let _ = std::fs::remove_dir_all(dir);
@@ -471,7 +485,7 @@ async fn rejected_client_id_is_reported_as_such() {
     let h = harness("invalid-client", User::Approve);
     h.http.push(400, r#"{"error":"invalid_client"}"#);
     assert_eq!(
-        h.ora.sign_in().await.err(),
+        h.ora.sign_in(None).await.err(),
         Some(OraError::SignIn {
             reason: SignInFailure::InvalidClient
         })
@@ -489,7 +503,10 @@ async fn client_id_setting_is_validated_and_saved() {
         dir,
     );
     assert_eq!(h.ora.status().auth, AuthState::NotConfigured);
-    assert_eq!(h.ora.sign_in().await.err(), Some(OraError::NotConfigured));
+    assert_eq!(
+        h.ora.sign_in(None).await.err(),
+        Some(OraError::NotConfigured)
+    );
     assert_eq!(
         h.ora.set_client_id("not valid").await.err(),
         Some(OraError::InvalidClientId)
@@ -506,7 +523,7 @@ async fn changing_the_client_id_signs_out_of_the_old_app() {
     let h = harness("client-id-change", User::Approve);
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
-    h.ora.sign_in().await.unwrap();
+    h.ora.sign_in(None).await.unwrap();
     let status = h
         .ora
         .set_client_id("fedcba9876543210fedcba9876543210")
@@ -522,7 +539,7 @@ async fn nothing_token_like_reaches_status_or_debug_output() {
     h.http
         .push(200, &tokens_json("acc-leakcheck", Some("ref-leakcheck")));
     h.http.push(200, ME);
-    let status = h.ora.sign_in().await.unwrap();
+    let status = h.ora.sign_in(None).await.unwrap();
     let shown = format!(
         "{}{:?}{:?}",
         serde_json::to_string(&status).unwrap(),
@@ -561,7 +578,7 @@ async fn a_fixed_callback_port_is_used_everywhere_and_shown() {
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
 
-    h.ora.sign_in().await.unwrap();
+    h.ora.sign_in(None).await.unwrap();
 
     let opened = url::Url::parse(&h.browser.opened.lock().unwrap()[0]).unwrap();
     let sent = opened
@@ -592,7 +609,7 @@ async fn a_busy_callback_port_is_reported_before_opening_the_browser() {
     let expected = OraError::SignIn {
         reason: SignInFailure::CallbackPortBusy,
     };
-    assert_eq!(h.ora.sign_in().await.err(), Some(expected.clone()));
+    assert_eq!(h.ora.sign_in(None).await.err(), Some(expected.clone()));
     assert_eq!(h.ora.status().last_error, Some(expected));
     assert_eq!(h.ora.status().auth, AuthState::SignedOut);
     assert!(h.browser.opened.lock().unwrap().is_empty());
@@ -640,10 +657,13 @@ async fn a_second_sign_in_while_one_is_pending_keeps_the_first() {
         free_port(),
     );
     let ora = Arc::clone(&h.ora);
-    let first = tokio::spawn(async move { ora.sign_in().await });
+    let first = tokio::spawn(async move { ora.sign_in(None).await });
     wait_for_signing_in(&h.ora).await;
 
-    assert_eq!(h.ora.sign_in().await.unwrap().auth, AuthState::SigningIn);
+    assert_eq!(
+        h.ora.sign_in(None).await.unwrap().auth,
+        AuthState::SigningIn
+    );
 
     let opened = loop {
         let opened = h.browser.opened.lock().unwrap().first().cloned();
@@ -677,7 +697,7 @@ async fn a_saved_sign_in_for_another_client_id_is_left_alone() {
     let h = harness("other-client", User::Approve);
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
-    h.ora.sign_in().await.unwrap();
+    h.ora.sign_in(None).await.unwrap();
 
     // Another copy, or a development override, uses a different Spotify app.
     let dir = temp_dir("other-client-copy");
@@ -714,7 +734,7 @@ async fn a_failed_save_leaves_no_older_sign_in_behind() {
     h.http.push(200, &tokens_json("acc1", Some("ref1")));
     h.http.push(200, ME);
 
-    let status = h.ora.sign_in().await.unwrap();
+    let status = h.ora.sign_in(None).await.unwrap();
 
     assert!(matches!(
         status.auth,
@@ -743,4 +763,236 @@ async fn a_rotated_token_that_cannot_be_saved_clears_the_stored_one() {
     ));
     assert_eq!(h.store.value(REFRESH_TOKEN), None);
     assert_eq!(h.store.value(SESSION), None);
+}
+
+#[tokio::test]
+async fn restore_reads_the_saved_scopes() {
+    let h = harness("restore-scopes", User::Ignore);
+    h.store.insert(REFRESH_TOKEN, "ref1");
+    h.store.insert(
+        SESSION,
+        &format!(r#"{{"authorizedAt":1,"scopes":"{PLAYBACK_SCOPES}","accountId":null}}"#),
+    );
+    h.http.push(200, &tokens_with_scope("acc1", None, ""));
+    h.http.push(200, ME);
+    h.ora.restore().await;
+    let features = granted(&h.ora.status());
+    assert!(features.contains(&Feature::EmbeddedPlayback));
+    assert!(features.contains(&Feature::Profile));
+    assert!(!features.contains(&Feature::Playlists));
+}
+
+#[tokio::test]
+async fn a_saved_sign_in_without_scopes_grants_only_scope_free_features() {
+    let h = harness("restore-no-scopes", User::Ignore);
+    h.store.insert(REFRESH_TOKEN, "ref1");
+    h.store
+        .insert(SESSION, r#"{"authorizedAt":1,"accountId":null}"#);
+    h.http.push(200, &tokens_with_scope("acc1", None, ""));
+    h.http.push(200, ME);
+    h.ora.restore().await;
+    let features = granted(&h.ora.status());
+    assert!(features.contains(&Feature::SignIn));
+    assert!(!features.contains(&Feature::Profile));
+    assert!(!features.contains(&Feature::EmbeddedPlayback));
+}
+
+#[tokio::test]
+async fn asking_for_playback_requests_every_scope_and_records_the_grant() {
+    let h = harness("incremental", User::Approve);
+    h.http.push(200, &tokens_json("acc1", Some("ref1")));
+    h.http.push(200, ME);
+    let status = h.ora.sign_in(None).await.unwrap();
+    assert!(!granted(&status).contains(&Feature::EmbeddedPlayback));
+
+    h.http.push(
+        200,
+        &tokens_with_scope("acc2", Some("ref2"), PLAYBACK_SCOPES),
+    );
+    h.http.push(200, ME);
+    let status = h
+        .ora
+        .sign_in(Some(Feature::EmbeddedPlayback))
+        .await
+        .unwrap();
+
+    assert!(granted(&status).contains(&Feature::EmbeddedPlayback));
+    let opened = h.browser.opened.lock().unwrap()[1].clone();
+    let url = url::Url::parse(&opened).unwrap();
+    let scope = url
+        .query_pairs()
+        .find(|(k, _)| k == "scope")
+        .map(|(_, v)| v.into_owned())
+        .unwrap();
+    assert_eq!(
+        scope,
+        "streaming user-modify-playback-state user-read-currently-playing \
+         user-read-playback-state user-read-private"
+    );
+    let session: serde_json::Value =
+        serde_json::from_str(&h.store.value(SESSION).unwrap()).unwrap();
+    assert_eq!(session["scopes"], PLAYBACK_SCOPES);
+    assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref2"));
+}
+
+#[tokio::test]
+async fn cancelling_the_extra_permission_keeps_the_existing_sign_in() {
+    let h = harness("incremental-cancel", User::Ignore);
+    h.store.insert(REFRESH_TOKEN, "ref1");
+    h.store.insert(
+        SESSION,
+        r#"{"authorizedAt":1,"scopes":"user-read-private","accountId":null}"#,
+    );
+    h.http.push(200, &tokens_json("acc1", None));
+    h.http.push(200, ME);
+    h.ora.restore().await;
+
+    let ora = Arc::clone(&h.ora);
+    let pending = tokio::spawn(async move { ora.sign_in(Some(Feature::EmbeddedPlayback)).await });
+    wait_for_signing_in(&h.ora).await;
+    let status = h.ora.cancel_sign_in();
+
+    assert!(signed_in_profile(&status).is_some());
+    assert_eq!(pending.await.unwrap().err(), Some(OraError::Cancelled));
+    assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref1"));
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc1");
+}
+
+#[tokio::test]
+async fn a_refresh_with_different_scopes_updates_the_grant() {
+    let h = signed_in_with_stale_access("refresh-scopes").await;
+    h.http
+        .push(200, &tokens_with_scope("acc2", None, PLAYBACK_SCOPES));
+    h.ora.fresh_access().await.unwrap();
+    assert!(granted(&h.ora.status()).contains(&Feature::EmbeddedPlayback));
+}
+
+/// Signed in with the playback scopes, and the SDK device "device1" ready.
+async fn playback_ready(label: &str) -> Harness {
+    let h = harness(label, User::Approve);
+    h.http.push(
+        200,
+        &tokens_with_scope("acc1", Some("ref1"), PLAYBACK_SCOPES),
+    );
+    h.http.push(200, ME);
+    h.ora
+        .sign_in(Some(Feature::EmbeddedPlayback))
+        .await
+        .unwrap();
+    h.ora.playback().apply(ora_types::SdkEvent::Probe {
+        probe: ora_types::Probe {
+            secure: true,
+            widevine: true,
+            ..ora_types::Probe::default()
+        },
+    });
+    h.ora.playback().apply(ora_types::SdkEvent::Ready {
+        device_id: "device1".into(),
+    });
+    h
+}
+
+#[tokio::test]
+async fn the_sdk_token_needs_the_playback_permission() {
+    let h = harness("sdk-token-scope", User::Approve);
+    assert_eq!(h.ora.sdk_token().await.err(), Some(OraError::SignedOut));
+    h.http.push(200, &tokens_json("acc1", Some("ref1")));
+    h.http.push(200, ME);
+    h.ora.sign_in(None).await.unwrap();
+    assert_eq!(
+        h.ora.sdk_token().await.err(),
+        Some(OraError::NeedsScope {
+            feature: Feature::EmbeddedPlayback
+        })
+    );
+
+    let h = playback_ready("sdk-token").await;
+    assert_eq!(h.ora.sdk_token().await.unwrap().expose(), "acc1");
+}
+
+#[tokio::test]
+async fn play_here_transfers_or_plays_the_pasted_link_on_this_device() {
+    let h = playback_ready("play-here").await;
+    let before = h.http.requests().len();
+    h.http.push(204, "");
+    h.ora.play_here(None).await.unwrap();
+    h.http.push(204, "");
+    let id: String = "AbCd0123456789".chars().chain("xyzXYZ01".chars()).collect();
+    h.ora
+        .play_here(Some(&format!(" https://open.spotify.com/album/{id}?si=x ")))
+        .await
+        .unwrap();
+
+    let seen = &h.http.requests()[before..];
+    assert_eq!(seen[0].url, "https://api.spotify.com/v1/me/player");
+    assert_eq!(
+        seen[0].json,
+        Some(serde_json::json!({"device_ids": ["device1"], "play": true}))
+    );
+    assert_eq!(
+        seen[1].url,
+        "https://api.spotify.com/v1/me/player/play?device_id=device1"
+    );
+    assert_eq!(
+        seen[1].json,
+        Some(serde_json::json!({"context_uri": format!("spotify:album:{id}")}))
+    );
+}
+
+#[tokio::test]
+async fn play_here_refuses_bad_links_and_missing_devices_without_a_request() {
+    let h = playback_ready("play-here-refusals").await;
+    let before = h.http.requests().len();
+    assert_eq!(
+        h.ora
+            .play_here(Some("https://example.invalid/album/x"))
+            .await
+            .err(),
+        Some(OraError::InvalidSpotifyLink)
+    );
+    h.ora.playback().reset();
+    assert_eq!(
+        h.ora.play_here(None).await.err(),
+        Some(OraError::NoActiveDevice)
+    );
+    assert_eq!(h.http.requests().len(), before);
+}
+
+#[tokio::test]
+async fn play_here_replays_once_after_an_unauthorised_reply() {
+    let h = playback_ready("play-here-replay").await;
+    let before = h.http.requests().len();
+    h.http.push(401, "");
+    h.http
+        .push(200, &tokens_with_scope("acc2", None, PLAYBACK_SCOPES));
+    h.http.push(204, "");
+    h.ora.play_here(None).await.unwrap();
+    let urls: Vec<String> = h.http.requests()[before..]
+        .iter()
+        .map(|r| r.url.clone())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://api.spotify.com/v1/me/player",
+            TOKEN_URL,
+            "https://api.spotify.com/v1/me/player"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_premium_refusal_is_returned_without_retrying() {
+    let h = playback_ready("play-here-premium").await;
+    let before = h.http.requests().len();
+    h.http.push(403, "");
+    assert_eq!(
+        h.ora.play_here(None).await.err(),
+        Some(OraError::Forbidden {
+            hint: ForbiddenHint::Premium
+        })
+    );
+    assert_eq!(h.http.requests().len() - before, 1);
+    // A player refusal isn't an account problem, so Settings doesn't show it.
+    assert_eq!(h.ora.status().last_error, None);
 }

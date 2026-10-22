@@ -69,6 +69,8 @@ pub enum OraError {
     InvalidClientId,
     /// The settings file could not be written.
     SettingsUnwritable,
+    /// Not an `open.spotify.com` album, artist, playlist, show, track or episode link.
+    InvalidSpotifyLink,
     SignIn {
         reason: SignInFailure,
     },
