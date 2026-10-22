@@ -1,0 +1,11 @@
+[package]
+name = "ora-core"
+version = "0.1.0"
+description = "Tauri-free shared logic for Spotify desktop clients"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Never add `tauri` here: scripts/check-ora-boundaries.sh fails the check if it appears.
+[dependencies]
+ora-types = { path = "../ora-types" }

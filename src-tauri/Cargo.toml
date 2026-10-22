@@ -2,8 +2,8 @@
 name = "melora"
 version = "0.1.0"
 description = "A personal desktop music client"
-edition = "2021"
-rust-version = "1.99"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [lib]
@@ -11,16 +11,10 @@ name = "melora_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "=2.7.2", features = [] }
+tauri-build = { workspace = true }
 
 [dependencies]
-tauri = { version = "=2.12.3", features = [] }
-serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.154"
-
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-strip = true
-panic = "abort"
+ora-tauri = { path = "../ora/crates/ora-tauri" }
+tauri = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

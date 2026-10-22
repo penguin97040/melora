@@ -8,9 +8,7 @@ function run(command, args, env = process.env) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 const target = 'x86_64-pc-windows-msvc';
-const targetDirectory = path.resolve(
-  process.env.CARGO_TARGET_DIR || 'src-tauri/target',
-);
+const targetDirectory = path.resolve(process.env.CARGO_TARGET_DIR || 'target');
 const env = { ...process.env, CARGO_TARGET_DIR: targetDirectory };
 const args = [
   'node_modules/@tauri-apps/cli/tauri.js',

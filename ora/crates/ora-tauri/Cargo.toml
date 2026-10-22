@@ -1,0 +1,11 @@
+[package]
+name = "ora-tauri"
+version = "0.1.0"
+description = "Tauri 2 plugin exposing ora-core to a client's main window"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ora-core = { path = "../ora-core" }
+tauri = { workspace = true }

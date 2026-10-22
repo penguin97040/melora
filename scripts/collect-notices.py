@@ -23,10 +23,16 @@ for name in ['react', 'react-dom', 'scheduler', '@tauri-apps/api']:
         shutil.copyfile(notice, destination / notice.name)
     report.append({'name': name, 'version': metadata['version'], 'licence': metadata.get('license')})
 
-result = subprocess.run(['cargo', 'metadata', '--manifest-path', 'src-tauri/Cargo.toml', '--locked', '--format-version', '1', '--filter-platform', 'x86_64-pc-windows-msvc'], check=True, capture_output=True, text=True)
+result = subprocess.run(['cargo', 'metadata', '--manifest-path', 'Cargo.toml', '--locked', '--format-version', '1', '--filter-platform', 'x86_64-pc-windows-msvc'], check=True, capture_output=True, text=True)
 metadata = json.loads(result.stdout)
 nodes = {node['id']: node for node in metadata['resolve']['nodes']}
-root_id = metadata['resolve']['root']
+# A virtual workspace has no resolve root, so start from the shipped application package.
+packages = {package['id']: package for package in metadata['packages']}
+workspace = set(metadata['workspace_members'])
+roots = [package_id for package_id in workspace if packages[package_id]['name'] == 'melora']
+if len(roots) != 1:
+    raise SystemExit('Cannot locate the melora package in the Cargo workspace')
+root_id = roots[0]
 visited = {root_id}
 pending = [root_id]
 while pending:
@@ -37,7 +43,8 @@ while pending:
             pending.append(dep['pkg'])
 missing = []
 for package in metadata['packages']:
-    if package['id'] not in visited or package['id'] == root_id:
+    # Workspace members (melora and the ora crates) are this project's own code, not dependencies.
+    if package['id'] not in visited or package['id'] in workspace:
         continue
     root = Path(package['manifest_path']).parent
     slug = package['name'] + '-' + package['version']

@@ -95,6 +95,7 @@ fn settings_directory(_app: &tauri::App) -> Result<std::path::PathBuf, Box<dyn s
 
 pub fn run() {
     let result = tauri::Builder::default()
+        .plugin(ora_tauri::init())
         .setup(|app| {
             app.manage(Mutex::new(Store::open(settings_directory(app)?)));
             app.manage(Mutex::new(window_layout::StartupWindow::default()));
