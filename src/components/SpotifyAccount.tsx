@@ -12,7 +12,6 @@ import {
   accountName,
   describeError,
   describeFailure,
-  REDIRECT_URI,
 } from '../features/account';
 
 function stateLine(status: SpotifyStatus | null): string {
@@ -40,6 +39,7 @@ export function SpotifyAccount({ status }: { status: SpotifyStatus | null }) {
   const [message, setMessage] = useState<string | null>(null);
   const desktop = hasNativeStorage();
   const kind = status?.auth.kind;
+  const redirectUri = status?.redirectUri;
 
   async function run(action: () => Promise<unknown>): Promise<boolean> {
     setBusy(true);
@@ -48,7 +48,7 @@ export function SpotifyAccount({ status }: { status: SpotifyStatus | null }) {
       await action();
       return true;
     } catch (error) {
-      setMessage(describeFailure(error));
+      setMessage(describeFailure(error, redirectUri));
       return false;
     } finally {
       setBusy(false);
@@ -60,12 +60,14 @@ export function SpotifyAccount({ status }: { status: SpotifyStatus | null }) {
   function signIn(): void {
     setMessage(null);
     signInWithSpotify().catch((error: unknown) =>
-      setMessage(describeFailure(error)),
+      setMessage(describeFailure(error, redirectUri)),
     );
   }
 
   const lastError =
-    !message && status?.lastError ? describeError(status.lastError) : null;
+    !message && status?.lastError
+      ? describeError(status.lastError, redirectUri)
+      : null;
   const profileUrl =
     status?.auth.kind === 'signedIn' ? status.auth.profile?.spotifyUrl : null;
 
@@ -77,10 +79,16 @@ export function SpotifyAccount({ status }: { status: SpotifyStatus | null }) {
       <h2 id="spotify-account-heading">Spotify account</h2>
       <p className="settings-note">
         Melora connects through your own Spotify app. In the Spotify Developer
-        Dashboard, add the Redirect URI <code>{REDIRECT_URI}</code> and your
-        account under User Management, then paste the app’s Client ID here.
-        Melora never asks for your Spotify password or Client Secret.
+        Dashboard, add this exact Redirect URI (it starts with http, not https,
+        and includes the port), and add your account under User Management. Then
+        paste the app’s Client ID here. Melora never asks for your Spotify
+        password or Client Secret.
       </p>
+      {redirectUri && (
+        <p className="redirect-uri">
+          Redirect URI: <code>{redirectUri}</code>
+        </p>
+      )}
       {status?.clientIdFromEnvironment ? (
         <p className="settings-note">
           The Client ID ({status.clientIdHint}) is set by the development

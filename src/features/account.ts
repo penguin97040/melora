@@ -1,7 +1,5 @@
 import type { OraError, SpotifyStatus } from '../native/client';
 
-export const REDIRECT_URI = 'http://127.0.0.1/callback';
-
 export function isOraError(value: unknown): value is OraError {
   return (
     typeof value === 'object' &&
@@ -11,7 +9,10 @@ export function isOraError(value: unknown): value is OraError {
 }
 
 /** Copy for an error from the ora plugin, or `null` when nothing should be shown. */
-export function describeError(error: OraError): string | null {
+export function describeError(
+  error: OraError,
+  redirectUri = 'the redirect URI shown in Settings',
+): string | null {
   switch (error.kind) {
     case 'cancelled':
       return null;
@@ -44,13 +45,15 @@ export function describeError(error: OraError): string | null {
         case 'BrowserUnavailable':
           return 'Your web browser couldn’t be opened.';
         case 'TimedOut':
-          return `Sign-in timed out. If Spotify showed an error about the redirect URI, add ${REDIRECT_URI} to your app’s Redirect URIs, then try again.`;
+          return `Sign-in timed out. If Spotify showed an error about the redirect URI, add ${redirectUri} exactly to your app’s Redirect URIs, then try again.`;
         case 'InvalidClient':
           return 'Spotify doesn’t recognise this Client ID. Check it in the Spotify Developer Dashboard.';
         case 'InvalidCallback':
           return 'The sign-in didn’t complete. Try again.';
+        case 'CallbackPortBusy':
+          return 'Another program on this PC is using Melora’s sign-in port. Close it, then try again.';
         case 'ExchangeRejected':
-          return `Spotify didn’t accept the sign-in. Check that ${REDIRECT_URI} is one of your app’s Redirect URIs, then try again.`;
+          return `Spotify didn’t accept the sign-in. Check that ${redirectUri} is one of your app’s Redirect URIs, then try again.`;
         default: {
           const unhandled: never = error.reason;
           void unhandled;
@@ -74,8 +77,11 @@ export function describeError(error: OraError): string | null {
   return 'Something went wrong. Try again.';
 }
 
-export function describeFailure(error: unknown): string | null {
-  if (isOraError(error)) return describeError(error);
+export function describeFailure(
+  error: unknown,
+  redirectUri?: string,
+): string | null {
+  if (isOraError(error)) return describeError(error, redirectUri);
   if (error instanceof Error) return error.message;
   return 'Something went wrong. Try again.';
 }

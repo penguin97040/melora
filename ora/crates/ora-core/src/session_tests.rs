@@ -84,6 +84,16 @@ fn configure(dir: &Path) {
 }
 
 fn build(http: MockHttp, store: MemoryStore, user: User, dir: PathBuf) -> Harness {
+    build_with_port(http, store, user, dir, 0)
+}
+
+fn build_with_port(
+    http: MockHttp,
+    store: MemoryStore,
+    user: User,
+    dir: PathBuf,
+    callback_port: u16,
+) -> Harness {
     let browser = MockBrowser {
         user,
         opened: Arc::default(),
@@ -97,6 +107,7 @@ fn build(http: MockHttp, store: MemoryStore, user: User, dir: PathBuf) -> Harnes
             settings_dir: dir.clone(),
             client_id_variable: "ORA_TEST_UNSET_VARIABLE",
             sign_in_timeout: Duration::from_secs(5),
+            callback_port,
         },
     ));
     Harness {
@@ -442,6 +453,7 @@ async fn sign_in_times_out_visibly() {
             settings_dir: dir.clone(),
             client_id_variable: "ORA_TEST_UNSET_VARIABLE",
             sign_in_timeout: Duration::from_millis(50),
+            callback_port: 0,
         },
     );
     let expected = OraError::SignIn {
@@ -521,4 +533,76 @@ async fn nothing_token_like_reaches_status_or_debug_output() {
         assert!(!shown.contains(leaked), "{leaked}");
         assert!(!access_debug.contains(leaked), "{leaked}");
     }
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+#[tokio::test]
+async fn a_fixed_callback_port_is_used_everywhere_and_shown() {
+    let port = free_port();
+    let dir = temp_dir("fixed-port");
+    configure(&dir);
+    let h = build_with_port(
+        MockHttp::default(),
+        MemoryStore::default(),
+        User::Approve,
+        dir,
+        port,
+    );
+    let expected = format!("http://127.0.0.1:{port}/callback");
+    assert_eq!(h.ora.status().redirect_uri, expected);
+    h.http.push(200, &tokens_json("acc1", Some("ref1")));
+    h.http.push(200, ME);
+
+    h.ora.sign_in().await.unwrap();
+
+    let opened = url::Url::parse(&h.browser.opened.lock().unwrap()[0]).unwrap();
+    let sent = opened
+        .query_pairs()
+        .find(|(k, _)| k == "redirect_uri")
+        .map(|(_, v)| v.into_owned());
+    assert_eq!(sent.as_deref(), Some(expected.as_str()));
+    let exchange = &h.http.requests()[0];
+    assert!(exchange
+        .form
+        .iter()
+        .any(|(k, v)| k == "redirect_uri" && *v == expected));
+}
+
+#[tokio::test]
+async fn a_busy_callback_port_is_reported_before_opening_the_browser() {
+    let blocker = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = blocker.local_addr().unwrap().port();
+    let dir = temp_dir("busy-port");
+    configure(&dir);
+    let h = build_with_port(
+        MockHttp::default(),
+        MemoryStore::default(),
+        User::Approve,
+        dir,
+        port,
+    );
+    let expected = OraError::SignIn {
+        reason: SignInFailure::CallbackPortBusy,
+    };
+    assert_eq!(h.ora.sign_in().await.err(), Some(expected.clone()));
+    assert_eq!(h.ora.status().last_error, Some(expected));
+    assert_eq!(h.ora.status().auth, AuthState::SignedOut);
+    assert!(h.browser.opened.lock().unwrap().is_empty());
+    drop(blocker);
+}
+
+#[test]
+fn port_zero_keeps_the_documented_port_less_registration() {
+    assert_eq!(registered_redirect_uri(0), "http://127.0.0.1/callback");
+    assert_eq!(
+        registered_redirect_uri(43821),
+        "http://127.0.0.1:43821/callback"
+    );
 }

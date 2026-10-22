@@ -458,6 +458,9 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         wait_script('return Array.isArray(window.__oraReview);')
         ora_review = execute('return window.__oraReview;')
         assert ora_review[0]['auth'] == {'kind': 'notConfigured'}, f'Unexpected initial account status: {ora_review[0]}'
+        # The Dashboard needs this exact URI; the app must send and show the same one.
+        assert ora_review[0]['redirectUri'] == 'http://127.0.0.1:43821/callback', 'Unexpected redirect URI'
+        assert execute("return document.querySelector('.redirect-uri code').textContent;") == 'http://127.0.0.1:43821/callback', 'Settings shows a different redirect URI'
         assert ora_review[1] == {'kind': 'invalidClientId'}, 'Invalid Client ID accepted'
         assert ora_review[2] == {'kind': 'unsupported'} and ora_review[3] == {'kind': 'unsupported'}, 'Non-Spotify URL accepted'
         synthetic_id = '0123456789abcdef' * 2

@@ -12,7 +12,7 @@ use crate::{
     browser::{self, Browser},
     config::{ClientId, ConfigStore},
     http::HttpClient,
-    loopback::{Callback, CallbackError},
+    loopback::{registered_redirect_uri, Callback, CallbackError},
     oauth::{self, TokenError},
     pkce, scopes_for,
     secret::Secret,
@@ -38,6 +38,9 @@ pub struct Options {
     /// A development override for the Client ID, for example `MELORA_SPOTIFY_CLIENT_ID`.
     pub client_id_variable: &'static str,
     pub sign_in_timeout: Duration,
+    /// The loopback port for the sign-in callback; register the matching URI exactly
+    /// (`loopback::registered_redirect_uri`). 0 picks a free port each time.
+    pub callback_port: u16,
 }
 
 struct Session {
@@ -62,6 +65,8 @@ struct Inner {
     /// What to return to if the current sign-in is cancelled or fails.
     before_sign_in: Option<Auth>,
     last_error: Option<OraError>,
+    /// Shown in the UI so the Dashboard entry always matches what is sent.
+    redirect_uri: String,
 }
 
 pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
@@ -71,6 +76,7 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
     config: ConfigStore,
     app_name: &'static str,
     sign_in_timeout: Duration,
+    callback_port: u16,
     inner: Mutex<Inner>,
     /// Bumped (while holding `inner`) by sign-out, cancel and Client ID changes.
     generation: watch::Sender<u64>,
@@ -93,6 +99,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             from_environment: loaded.from_environment,
             before_sign_in: None,
             last_error: loaded.error,
+            redirect_uri: registered_redirect_uri(options.callback_port),
         };
         let status = watch::Sender::new(snapshot(&inner));
         Self {
@@ -102,6 +109,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             config,
             app_name: options.app_name,
             sign_in_timeout: options.sign_in_timeout,
+            callback_port: options.callback_port,
             inner: Mutex::new(inner),
             generation: watch::Sender::new(0),
             refresh_gate: tokio::sync::Mutex::new(()),
@@ -217,7 +225,17 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     async fn sign_in_flow(&self, client_id: &ClientId, generation: u64) -> Result<(), OraError> {
         let pkce = pkce::generate().map_err(|_| OraError::Unsupported)?;
         let state = pkce::state().map_err(|_| OraError::Unsupported)?;
-        let callback = Callback::bind().await.map_err(|_| OraError::Unsupported)?;
+        let callback =
+            Callback::bind(self.callback_port)
+                .await
+                .map_err(|error| match error.kind() {
+                    std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied => {
+                        OraError::SignIn {
+                            reason: SignInFailure::CallbackPortBusy,
+                        }
+                    }
+                    _ => OraError::Unsupported,
+                })?;
         let redirect_uri = callback.redirect_uri().to_owned();
         let url = oauth::authorize_url(
             client_id,
@@ -539,6 +557,7 @@ fn snapshot(inner: &Inner) -> Status {
         },
         client_id_from_environment: inner.from_environment,
         client_id_hint: inner.client_id.as_ref().map(ClientId::hint),
+        redirect_uri: inner.redirect_uri.clone(),
         last_error: inner.last_error.clone(),
     }
 }

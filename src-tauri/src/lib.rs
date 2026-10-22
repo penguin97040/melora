@@ -97,6 +97,8 @@ pub fn run() {
             app_name: "Melora",
             client_id_variable: "MELORA_SPOTIFY_CLIENT_ID",
             settings_dir: settings_directory,
+            // Register http://127.0.0.1:43821/callback in the Spotify Developer Dashboard.
+            callback_port: 43821,
         }))
         .setup(|app| {
             let directory = settings_directory(app.handle())

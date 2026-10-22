@@ -28,6 +28,8 @@ pub enum SignInFailure {
     InvalidClient,
     /// The callback was malformed or didn't match this sign-in.
     InvalidCallback,
+    /// Another program is using the sign-in callback port.
+    CallbackPortBusy,
     /// Spotify refused the authorisation code exchange.
     ExchangeRejected,
 }

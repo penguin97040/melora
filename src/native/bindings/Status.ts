@@ -15,6 +15,10 @@ clientIdFromEnvironment: boolean,
  */
 clientIdHint: string | null, 
 /**
+ * The exact redirect URI to register in the Spotify Developer Dashboard.
+ */
+redirectUri: string, 
+/**
  * The most recent failure worth showing, cleared by the next successful action.
  */
 lastError: OraError | null, };

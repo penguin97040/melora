@@ -219,6 +219,11 @@ p {
   color: var(--text);
   font-size: 1.25rem;
 }
+.redirect-uri {
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
 .account-settings code {
   color: var(--cyan);
   font-family: var(--font-technical);

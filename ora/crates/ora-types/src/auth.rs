@@ -48,6 +48,8 @@ pub struct Status {
     pub client_id_from_environment: bool,
     /// A short masked form of the configured Client ID (first and last four characters).
     pub client_id_hint: Option<String>,
+    /// The exact redirect URI to register in the Spotify Developer Dashboard.
+    pub redirect_uri: String,
     /// The most recent failure worth showing, cleared by the next successful action.
     pub last_error: Option<OraError>,
 }

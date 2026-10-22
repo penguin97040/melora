@@ -34,9 +34,21 @@ enum Outcome {
     Ignore,
 }
 
+/// The URI to register in the Spotify Dashboard for a configured port. Port 0 means "any free
+/// port", registered without a port as Spotify's docs allow; in practice the Dashboard refuses
+/// that form, so clients configure a fixed port and register it exactly.
+pub fn registered_redirect_uri(port: u16) -> String {
+    if port == 0 {
+        "http://127.0.0.1/callback".to_owned()
+    } else {
+        format!("http://127.0.0.1:{port}/callback")
+    }
+}
+
 impl Callback {
-    pub async fn bind() -> std::io::Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    /// Listens on `127.0.0.1:port` (0 picks a free port).
+    pub async fn bind(port: u16) -> std::io::Result<Self> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let port = listener.local_addr()?.port();
         Ok(Self {
             listener,
@@ -44,7 +56,7 @@ impl Callback {
         })
     }
 
-    /// Registered in the Spotify Dashboard without a port, which loopback literals allow.
+    /// The redirect URI for this sign-in, always with the actual port.
     pub fn redirect_uri(&self) -> &str {
         &self.redirect_uri
     }
@@ -202,7 +214,7 @@ pub(crate) mod tests {
     }
 
     async fn run(requests: Vec<&'static str>) -> (Result<Secret, CallbackError>, Vec<String>) {
-        let callback = Callback::bind().await.unwrap();
+        let callback = Callback::bind(0).await.unwrap();
         let redirect = callback.redirect_uri().to_owned();
         let state = Secret::new("good-state");
         let client = tokio::spawn(async move {
@@ -220,7 +232,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn redirect_uri_uses_the_loopback_literal_and_a_real_port() {
-        let callback = Callback::bind().await.unwrap();
+        let callback = Callback::bind(0).await.unwrap();
         let uri = callback.redirect_uri();
         assert!(uri.starts_with("http://127.0.0.1:"));
         assert!(uri.ends_with("/callback"));
@@ -254,7 +266,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn duplicate_callback_finds_the_listener_closed() {
-        let callback = Callback::bind().await.unwrap();
+        let callback = Callback::bind(0).await.unwrap();
         let redirect = callback.redirect_uri().to_owned();
         let state = Secret::new("good-state");
         let first = tokio::spawn({
@@ -274,7 +286,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn waiting_times_out() {
-        let callback = Callback::bind().await.unwrap();
+        let callback = Callback::bind(0).await.unwrap();
         let state = Secret::new("good-state");
         let result = callback
             .wait(&state, "Melora", Duration::from_millis(50))
@@ -285,7 +297,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn oversized_or_non_get_requests_are_ignored() {
         let long = Box::leak(format!("/callback?pad={}", "x".repeat(9000)).into_boxed_str());
-        let callback = Callback::bind().await.unwrap();
+        let callback = Callback::bind(0).await.unwrap();
         let redirect = callback.redirect_uri().to_owned();
         let state = Secret::new("good-state");
         let client = tokio::spawn(async move {

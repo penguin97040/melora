@@ -58,6 +58,7 @@ const previewSpotifyStatus: SpotifyStatus = {
   clientIdFromEnvironment: false,
   clientIdHint: null,
   lastError: null,
+  redirectUri: 'http://127.0.0.1:43821/callback',
 };
 
 function requireDesktop(): void {

@@ -33,6 +33,9 @@ pub struct OraConfig<R: Runtime> {
     pub client_id_variable: &'static str,
     /// Where `spotify.json` lives (beside the executable for Windows portable builds).
     pub settings_dir: fn(&AppHandle<R>) -> Option<PathBuf>,
+    /// Fixed loopback port for the sign-in callback. The Spotify Dashboard refuses port-less
+    /// `http://127.0.0.1/callback`, so each client registers `http://127.0.0.1:<port>/callback`.
+    pub callback_port: u16,
 }
 
 /// The plugin, registered by each client with `.plugin(ora_tauri::init(config))`.
@@ -61,6 +64,7 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
                     settings_dir,
                     client_id_variable: config.client_id_variable,
                     sign_in_timeout: SIGN_IN_TIMEOUT,
+                    callback_port: config.callback_port,
                 },
             ));
             app.manage(Shared(Arc::clone(&core)));

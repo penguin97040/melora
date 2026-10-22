@@ -29,6 +29,7 @@ function status(
     clientIdFromEnvironment: false,
     clientIdHint: null,
     lastError: null,
+    redirectUri: 'http://127.0.0.1:43821/callback',
     ...extra,
   };
 }
@@ -168,6 +169,30 @@ describe('Spotify account settings', () => {
       />,
     );
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the exact redirect URI the native side uses', () => {
+    render(
+      <SpotifyAccount
+        status={status(
+          { kind: 'signedOut' },
+          { redirectUri: 'http://127.0.0.1:50000/callback' },
+        )}
+      />,
+    );
+    expect(screen.getByText('http://127.0.0.1:50000/callback')).toBeVisible();
+  });
+
+  it('explains a busy sign-in port', () => {
+    render(
+      <SpotifyAccount
+        status={status(
+          { kind: 'signedOut' },
+          { lastError: { kind: 'signIn', reason: 'CallbackPortBusy' } },
+        )}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('sign-in port');
   });
 
   it('hides the Client ID field when the environment sets it', () => {

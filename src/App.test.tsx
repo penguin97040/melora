@@ -24,6 +24,7 @@ vi.mock('./native/client', () => ({
       clientIdFromEnvironment: false,
       clientIdHint: null,
       lastError: null,
+      redirectUri: 'http://127.0.0.1:43821/callback',
     }),
   ),
   openInSpotify: vi.fn(),
