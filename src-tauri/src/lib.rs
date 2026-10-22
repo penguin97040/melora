@@ -103,6 +103,10 @@ pub fn run() {
         .setup(|app| {
             let directory = settings_directory(app.handle())
                 .ok_or("Cannot locate the portable application folder.")?;
+            // Windows portable: WebView2's profile, including the playback SDK's storage, stays
+            // in `data\webview` beside the executable instead of %LOCALAPPDATA%.
+            #[cfg(target_os = "windows")]
+            let webview_data = directory.join("webview");
             app.manage(Mutex::new(Store::open(directory)));
             app.manage(Mutex::new(window_layout::StartupWindow::default()));
             let config = app
@@ -116,10 +120,14 @@ pub fn run() {
             } else {
                 None
             };
-            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
-                .on_navigation(move |url| navigation::allowed(url, dev_url.as_ref()))
-                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-                .build()?;
+            let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                .on_navigation(move |url| {
+                    navigation::allowed(url, dev_url.as_ref(), ora_tauri::sdk_frame_allowed())
+                })
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+            #[cfg(target_os = "windows")]
+            let builder = builder.data_directory(webview_data);
+            let window = builder.build()?;
             window_layout::fit_opening_window(&window)?;
             Ok(())
         })
@@ -138,23 +146,40 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn csp_allows_exactly_the_image_host_the_profile_keeps() {
+    /// The remote (`https://`) sources of one CSP directive.
+    fn remote_sources(directive: &str) -> Vec<String> {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let csp = config["app"]["security"]["csp"].as_str().unwrap();
-        let img_src = csp
+        let sources = csp
             .split(';')
             .map(str::trim)
-            .find(|directive| directive.starts_with("img-src "))
-            .unwrap();
-        let remote: Vec<&str> = img_src
+            .find(|d| d.split_whitespace().next() == Some(directive))
+            .unwrap_or_else(|| panic!("{directive} missing"));
+        sources
             .split_whitespace()
-            .filter(|source| source.starts_with("https://"))
-            .collect();
+            .skip(1)
+            .filter(|source| source.contains("://") && !source.starts_with("http://ipc."))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn csp_allows_exactly_the_image_host_the_profile_keeps() {
         assert_eq!(
-            remote,
+            remote_sources("img-src"),
             [format!("https://{}", ora_tauri::core::api::IMAGE_HOST)]
         );
+    }
+
+    #[test]
+    fn csp_allows_only_the_playback_sdk_as_remote_script_and_frame() {
+        assert_eq!(remote_sources("script-src"), [ora_tauri::SDK_ORIGIN]);
+        assert_eq!(remote_sources("frame-src"), [ora_tauri::SDK_ORIGIN]);
+        assert!(ora_tauri::SDK_FRAME_URL.starts_with(&format!("{}/", ora_tauri::SDK_ORIGIN)));
+        // All Spotify HTTP is done in Rust, so the page itself connects nowhere else.
+        for directive in ["default-src", "connect-src", "style-src", "font-src"] {
+            assert!(remote_sources(directive).is_empty(), "{directive}");
+        }
     }
 }
