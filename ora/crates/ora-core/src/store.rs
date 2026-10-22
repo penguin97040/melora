@@ -2,11 +2,11 @@
 //! Calls block, so callers run them with `spawn_blocking`. There is no file fallback.
 
 use crate::secret::Secret;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 /// The refresh token, alone, under the client's service name.
 pub const REFRESH_TOKEN: &str = "spotify-refresh-token";
-/// Non-secret session details as JSON: `{authorizedAt, scopes, accountId}`.
+/// Non-secret session details as JSON: `{authorizedAt, scopes, accountId, clientId}`.
 pub const SESSION: &str = "spotify-session";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +28,9 @@ pub struct KeyringStore {
     service: &'static str,
 }
 
-static DEFAULT_STORE: OnceLock<Result<&'static str, StoreError>> = OnceLock::new();
+/// The initialised platform store's name. Only success is cached: a store that isn't reachable
+/// yet (for example a Secret Service that starts after the app at login) is retried next time.
+static DEFAULT_STORE: Mutex<Option<&'static str>> = Mutex::new(None);
 
 impl KeyringStore {
     pub fn new(service: &'static str) -> Self {
@@ -37,7 +39,17 @@ impl KeyringStore {
 
     /// The platform store's name, for development diagnostics (never values).
     pub fn backend() -> Result<&'static str, StoreError> {
-        *DEFAULT_STORE.get_or_init(init_default_store)
+        // Held across initialisation so the default store is set at most once. Every caller
+        // needs the store anyway, and these calls already run off the async runtime.
+        let mut initialised = DEFAULT_STORE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(name) = *initialised {
+            return Ok(name);
+        }
+        let name = init_default_store()?;
+        *initialised = Some(name);
+        Ok(name)
     }
 
     fn entry(&self, key: &str) -> Result<keyring_core::Entry, StoreError> {

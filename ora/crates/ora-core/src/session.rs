@@ -5,6 +5,9 @@
 //!   in memory. Neither is ever part of `Status`.
 //! - A generation counter makes sign-out and cancel win over anything still in flight: late
 //!   results from an older generation are discarded (and never persisted).
+//! - Credential-store writes and deletions take turns behind one gate, and a write first checks
+//!   the generation, so a sign-out's deletion always lands after any write that beat it.
+//! - The store never holds more than the UI admits to: a session-only sign-in leaves it empty.
 //! - No lock is held across network or credential-store I/O.
 
 use crate::{
@@ -82,6 +85,8 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
     generation: watch::Sender<u64>,
     /// Serialises refreshes so concurrent callers share one token request.
     refresh_gate: tokio::sync::Mutex<()>,
+    /// Serialises credential-store writes and deletions (see the module rules).
+    store_gate: tokio::sync::Mutex<()>,
     status: watch::Sender<Status>,
 }
 
@@ -113,6 +118,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             inner: Mutex::new(inner),
             generation: watch::Sender::new(0),
             refresh_gate: tokio::sync::Mutex::new(()),
+            store_gate: tokio::sync::Mutex::new(()),
             status,
         }
     }
@@ -159,14 +165,37 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             .unwrap_or(Err(StoreError::Failed))
     }
 
-    /// At startup: pick up a saved sign-in, then fetch the profile.
+    /// Runs a store write only while `generation` is current; `None` means it was skipped.
+    async fn store_if_current<T: Send + 'static>(
+        &self,
+        generation: u64,
+        call: impl FnOnce(&S) -> Result<T, StoreError> + Send + 'static,
+    ) -> Option<Result<T, StoreError>> {
+        let _gate = self.store_gate.lock().await;
+        if self.current_generation() != generation {
+            return None;
+        }
+        Some(self.store_call(call).await)
+    }
+
+    /// At startup: pick up a saved sign-in, then fetch the profile. A sign-in saved for a
+    /// different Client ID (another copy, or a development override) is left alone: refreshing
+    /// it here would fail and delete it for the copy it belongs to.
     pub async fn restore(&self) {
         let generation = self.current_generation();
-        if !matches!(self.lock().auth, Auth::SignedOut) {
-            return;
-        }
-        match self.store_call(|store| store.get(REFRESH_TOKEN)).await {
-            Ok(Some(refresh)) => {
+        let client_id = {
+            let inner = self.lock();
+            match (&inner.auth, &inner.client_id) {
+                (Auth::SignedOut, Some(id)) => id.clone(),
+                _ => return,
+            }
+        };
+        let saved = self
+            .store_call(|store| Ok((store.get(REFRESH_TOKEN)?, store.get(SESSION)?)))
+            .await;
+        match saved {
+            Ok((Some(_), Some(metadata))) if !issued_to(&metadata, &client_id) => {}
+            Ok((Some(refresh), _)) => {
                 let restored = self.update(|inner, ora| {
                     let current = ora.current_generation() == generation
                         && matches!(inner.auth, Auth::SignedOut);
@@ -184,25 +213,27 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                     let _ = self.load_profile().await;
                 }
             }
-            Ok(None) => {}
+            Ok((None, _)) => {}
             Err(_) => self.update(|inner, _| inner.last_error = Some(OraError::StorageUnavailable)),
         }
     }
 
     pub async fn sign_in(&self) -> Result<Status, OraError> {
-        let (client_id, generation) = self.update(|inner, ora| {
+        let started = self.update(|inner, ora| {
             let client_id = inner.client_id.clone().ok_or(OraError::NotConfigured)?;
             if matches!(inner.auth, Auth::SigningIn) {
-                // A new sign-in replaces the pending one; its late callback is ignored.
-                ora.bump_generation();
-            } else {
-                let previous = std::mem::replace(&mut inner.auth, Auth::SigningIn);
-                inner.before_sign_in = Some(previous);
+                // One sign-in at a time. Its browser tab is already open, and a fixed callback
+                // port can't be bound twice; Cancel ends it.
+                return Ok(None);
             }
-            inner.auth = Auth::SigningIn;
+            let previous = std::mem::replace(&mut inner.auth, Auth::SigningIn);
+            inner.before_sign_in = Some(previous);
             inner.last_error = None;
-            Ok::<_, OraError>((client_id, ora.current_generation()))
+            Ok::<_, OraError>(Some((client_id, ora.current_generation())))
         })?;
+        let Some((client_id, generation)) = started else {
+            return Ok(self.status());
+        };
         match self.sign_in_flow(&client_id, generation).await {
             Ok(()) => {
                 let _ = self.load_profile().await;
@@ -283,21 +314,21 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         let refresh = tokens.refresh.ok_or(OraError::SignIn {
             reason: SignInFailure::ExchangeRejected,
         })?;
-        if self.current_generation() != generation {
-            return Err(OraError::Cancelled);
-        }
-
         // Persist before reporting success. Without a usable store, continue for this
-        // session only and say so.
-        let metadata = Secret::new(session_metadata(&tokens.scope));
+        // session only, say so, and leave nothing half-saved behind.
+        let metadata = Secret::new(session_metadata(&tokens.scope, client_id));
         let saved = {
             let refresh = refresh.clone();
-            self.store_call(move |store| {
+            self.store_if_current(generation, move |store| {
                 store.set(REFRESH_TOKEN, &refresh)?;
                 store.set(SESSION, &metadata)
             })
             .await
+            .ok_or(OraError::Cancelled)?
         };
+        if saved.is_err() {
+            let _ = self.forget_stored_if_current(generation).await;
+        }
         let accepted = self.update(|inner, ora| {
             if ora.current_generation() != generation {
                 return false;
@@ -352,13 +383,13 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     }
 
     async fn forget_stored(&self) -> Result<(), StoreError> {
-        self.store_call(|store| {
-            // Attempt both deletions, then report either failure.
-            let first = store.delete(REFRESH_TOKEN);
-            let second = store.delete(SESSION);
-            first.and(second)
-        })
-        .await
+        let _gate = self.store_gate.lock().await;
+        self.store_call(forget).await
+    }
+
+    /// For cleanup after a failed save: a newer sign-in's entries are never touched.
+    async fn forget_stored_if_current(&self, generation: u64) -> Option<Result<(), StoreError>> {
+        self.store_if_current(generation, forget).await
     }
 
     pub async fn set_client_id(&self, value: &str) -> Result<Status, OraError> {
@@ -491,14 +522,19 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             Err(TokenError::Transport(error)) => return Err(api::transport_error(error)),
             Err(TokenError::Rejected | TokenError::Malformed) => return Err(OraError::Network),
         };
-        // A rotated refresh token is saved before the refresh counts as done.
+        // A rotated refresh token is saved before the refresh counts as done. If it can't be,
+        // the session continues in memory only and the outdated stored entries go.
         let mut stored_ok = true;
         if let (Some(rotated), false) = (&tokens.refresh, session_only) {
             let rotated = rotated.clone();
             stored_ok = self
-                .store_call(move |store| store.set(REFRESH_TOKEN, &rotated))
+                .store_if_current(generation, move |store| store.set(REFRESH_TOKEN, &rotated))
                 .await
+                .ok_or(OraError::Cancelled)?
                 .is_ok();
+            if !stored_ok {
+                let _ = self.forget_stored_if_current(generation).await;
+            }
         }
         let access = tokens.access.clone();
         let accepted = self.update(|inner, ora| {
@@ -562,9 +598,17 @@ fn snapshot(inner: &Inner) -> Status {
     }
 }
 
-/// `{authorizedAt, scopes, accountId}`. Spotify doesn't reveal when a refresh token was
-/// issued, and it expires six months after authorisation, so record the time here.
-fn session_metadata(scopes: &str) -> String {
+/// Deletes both entries, attempting each, and reports either failure.
+fn forget<S: CredentialStore>(store: &S) -> Result<(), StoreError> {
+    let first = store.delete(REFRESH_TOKEN);
+    let second = store.delete(SESSION);
+    first.and(second)
+}
+
+/// `{authorizedAt, scopes, accountId, clientId}`. Spotify doesn't reveal when a refresh token
+/// was issued, and it expires six months after authorisation, so record the time here. The
+/// Client ID says which Spotify app the token belongs to.
+fn session_metadata(scopes: &str, client_id: &ClientId) -> String {
     let authorized_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -573,8 +617,22 @@ fn session_metadata(scopes: &str) -> String {
         "authorizedAt": authorized_at,
         "scopes": scopes,
         "accountId": null,
+        "clientId": client_id.as_str(),
     })
     .to_string()
+}
+
+/// Whether saved session metadata belongs to `client_id`. Entries saved before the Client ID
+/// was recorded can't tell, so they are kept as they were.
+fn issued_to(metadata: &Secret, client_id: &ClientId) -> bool {
+    serde_json::from_str::<serde_json::Value>(metadata.expose())
+        .ok()
+        .and_then(|value| {
+            value["clientId"]
+                .as_str()
+                .map(|id| id == client_id.as_str())
+        })
+        .unwrap_or(true)
 }
 
 #[cfg(test)]

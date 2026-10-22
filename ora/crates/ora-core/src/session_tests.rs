@@ -169,6 +169,7 @@ async fn sign_in_saves_the_refresh_token_and_shows_the_profile() {
         serde_json::from_str(&h.store.value(SESSION).unwrap()).unwrap();
     assert_eq!(session["scopes"], "user-read-private");
     assert!(session["authorizedAt"].as_u64().unwrap() > 1_700_000_000);
+    assert_eq!(session["clientId"], CLIENT_ID);
 
     // The authorise URL asked only for the profile scope, and the exchange proved the PKCE pair.
     let opened = h.browser.opened.lock().unwrap()[0].clone();
@@ -605,4 +606,141 @@ fn port_zero_keeps_the_documented_port_less_registration() {
         registered_redirect_uri(43821),
         "http://127.0.0.1:43821/callback"
     );
+}
+
+#[tokio::test]
+async fn sign_out_during_a_refresh_leaves_nothing_stored() {
+    let h = signed_in_with_stale_access("logout-during-refresh").await;
+    h.http.set_delay(Some(Duration::from_millis(100)));
+    h.http.push(200, &tokens_json("acc2", Some("ref2")));
+    let before = h.http.requests().len();
+    let ora = Arc::clone(&h.ora);
+    let refreshing = tokio::spawn(async move { ora.fresh_access().await });
+    while h.http.requests().len() == before {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    h.ora.sign_out().await.unwrap();
+
+    assert_eq!(refreshing.await.unwrap().err(), Some(OraError::Cancelled));
+    assert_eq!(h.ora.status().auth, AuthState::SignedOut);
+    assert_eq!(h.store.value(REFRESH_TOKEN), None);
+    assert_eq!(h.store.value(SESSION), None);
+}
+
+#[tokio::test]
+async fn a_second_sign_in_while_one_is_pending_keeps_the_first() {
+    let dir = temp_dir("double-sign-in");
+    configure(&dir);
+    let h = build_with_port(
+        MockHttp::default(),
+        MemoryStore::default(),
+        User::Ignore,
+        dir,
+        free_port(),
+    );
+    let ora = Arc::clone(&h.ora);
+    let first = tokio::spawn(async move { ora.sign_in().await });
+    wait_for_signing_in(&h.ora).await;
+
+    assert_eq!(h.ora.sign_in().await.unwrap().auth, AuthState::SigningIn);
+
+    let opened = loop {
+        let opened = h.browser.opened.lock().unwrap().first().cloned();
+        if let Some(opened) = opened {
+            break opened;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_eq!(h.browser.opened.lock().unwrap().len(), 1);
+    let url = url::Url::parse(&opened).unwrap();
+    let param = |name: &str| {
+        url.query_pairs()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.into_owned())
+            .unwrap()
+    };
+    h.http.push(200, &tokens_json("acc1", Some("ref1")));
+    h.http.push(200, ME);
+    let reply = get(
+        &param("redirect_uri"),
+        &format!("/callback?code=fixture-code&state={}", param("state")),
+    )
+    .await
+    .unwrap();
+    assert!(reply.contains("200"));
+    assert!(signed_in_profile(&first.await.unwrap().unwrap()).is_some());
+}
+
+#[tokio::test]
+async fn a_saved_sign_in_for_another_client_id_is_left_alone() {
+    let h = harness("other-client", User::Approve);
+    h.http.push(200, &tokens_json("acc1", Some("ref1")));
+    h.http.push(200, ME);
+    h.ora.sign_in().await.unwrap();
+
+    // Another copy, or a development override, uses a different Spotify app.
+    let dir = temp_dir("other-client-copy");
+    ConfigStore::new(dir.clone(), "ORA_TEST_UNSET_VARIABLE")
+        .save(&ClientId::parse("fedcba9876543210fedcba9876543210").unwrap())
+        .unwrap();
+    let other = build(MockHttp::default(), h.store.clone(), User::Ignore, dir);
+    other.ora.restore().await;
+
+    assert_eq!(other.ora.status().auth, AuthState::SignedOut);
+    assert!(other.http.requests().is_empty());
+    assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref1"));
+}
+
+#[tokio::test]
+async fn a_saved_sign_in_without_a_recorded_client_id_still_restores() {
+    let h = harness("earlier-session", User::Ignore);
+    h.store.insert(REFRESH_TOKEN, "ref1");
+    h.store.insert(
+        SESSION,
+        r#"{"authorizedAt":1,"scopes":"user-read-private","accountId":null}"#,
+    );
+    h.http.push(200, &tokens_json("acc1", None));
+    h.http.push(200, ME);
+    h.ora.restore().await;
+    assert!(signed_in_profile(&h.ora.status()).is_some());
+}
+
+#[tokio::test]
+async fn a_failed_save_leaves_no_older_sign_in_behind() {
+    let h = harness("failed-save", User::Approve);
+    h.store.insert(REFRESH_TOKEN, "older");
+    h.store.fail_writes.store(true, Ordering::SeqCst);
+    h.http.push(200, &tokens_json("acc1", Some("ref1")));
+    h.http.push(200, ME);
+
+    let status = h.ora.sign_in().await.unwrap();
+
+    assert!(matches!(
+        status.auth,
+        AuthState::SignedIn {
+            session_only: true,
+            ..
+        }
+    ));
+    assert_eq!(h.store.value(REFRESH_TOKEN), None);
+}
+
+#[tokio::test]
+async fn a_rotated_token_that_cannot_be_saved_clears_the_stored_one() {
+    let h = signed_in_with_stale_access("rotation-failure").await;
+    h.store.fail_writes.store(true, Ordering::SeqCst);
+    h.http.push(200, &tokens_json("acc2", Some("ref2")));
+
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc2");
+
+    assert!(matches!(
+        h.ora.status().auth,
+        AuthState::SignedIn {
+            session_only: true,
+            ..
+        }
+    ));
+    assert_eq!(h.store.value(REFRESH_TOKEN), None);
+    assert_eq!(h.store.value(SESSION), None);
 }
