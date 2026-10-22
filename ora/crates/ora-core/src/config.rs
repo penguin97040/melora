@@ -1,18 +1,13 @@
 //! The Spotify Client ID, kept in `spotify.json` in the client's settings folder. It isn't a
 //! secret, but it is the owner's own app, so it never enters a repository.
 
+use crate::fsio::{read_bounded, write_atomic};
 use ora_types::OraError;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::path::PathBuf;
 
 const FILE_NAME: &str = "spotify.json";
 const MAX_BYTES: u64 = 4096;
-static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClientId(String);
@@ -88,7 +83,7 @@ impl ConfigStore {
                 };
             }
         }
-        match read_bounded(&self.directory.join(FILE_NAME)) {
+        match read_bounded(&self.directory.join(FILE_NAME), MAX_BYTES) {
             Ok(bytes) => match serde_json::from_slice::<ConfigFile>(&bytes)
                 .ok()
                 .map(|file| ClientId::parse(&file.client_id))
@@ -119,65 +114,10 @@ impl ConfigStore {
     }
 }
 
-// Reject links and special files (a FIFO could block startup), then re-check the open handle.
-fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
-    let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid settings file");
-    if !fs::symlink_metadata(path)?.is_file() {
-        return Err(invalid());
-    }
-    let file = File::open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(invalid());
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(invalid());
-    }
-    Ok(bytes)
-}
-
-// Exclusive creation never follows or truncates an existing file or link. The temporary file
-// sits beside the destination so the rename is atomic, and is removed if anything fails.
-fn write_atomic(directory: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
-    fs::create_dir_all(directory)?;
-    for _ in 0..128 {
-        let temporary = directory.join(format!(
-            "{name}-{}-{}.tmp",
-            std::process::id(),
-            NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
-        ));
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = file
-            .write_all(bytes)
-            .and_then(|()| file.sync_all())
-            .and_then(|()| {
-                // Close before replacing the destination, including on Windows.
-                drop(file);
-                fs::rename(&temporary, directory.join(name))
-            });
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        return result;
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "Temporary settings file unavailable",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const ID: &str = "0123456789abcdef0123456789abcdef";

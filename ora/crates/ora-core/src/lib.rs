@@ -5,6 +5,7 @@
 pub mod api;
 pub mod browser;
 pub mod config;
+pub mod fsio;
 pub mod http;
 pub mod loopback;
 pub mod oauth;
