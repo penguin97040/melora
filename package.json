@@ -13,7 +13,7 @@
     "build": "npm run typecheck && node node_modules/vite/bin/vite.js build && node scripts/check-assets.mjs",
     "preview": "node node_modules/vite/bin/vite.js preview --host 127.0.0.1",
     "tauri": "node node_modules/@tauri-apps/cli/tauri.js",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build && python3 -m unittest discover -s scripts/tests",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build && python3 -m unittest discover -s scripts/tests && bash scripts/check-ora-boundaries.sh",
     "build:windows": "node scripts/build-windows.mjs",
     "gate": "python3 scripts/publication_gate.py"
   },

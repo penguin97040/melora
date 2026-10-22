@@ -1,6 +1,6 @@
 # Development
 
-Use npm and `package-lock.json`; Rust dependencies use `src-tauri/Cargo.lock`. Application version is read from `package.json` by Tauri; keep the Cargo package version in sync.
+Use npm and `package-lock.json`; Rust dependencies use the root Cargo workspace (`Cargo.toml`, `Cargo.lock`), with members `src-tauri` and the shared crates in `ora/crates/`. Application version is read from `package.json` by Tauri; keep the Cargo package version in sync.
 
 ```sh
 npm ci
@@ -25,11 +25,13 @@ No Spotify configuration is required for the preview shell.
 
 ```sh
 npm run check
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
-cargo clippy --manifest-path src-tauri/Cargo.toml --locked -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo check --manifest-path src-tauri/Cargo.toml --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo check --workspace --locked
 ```
+
+`npm run check` also runs `scripts/check-ora-boundaries.sh`, which needs the `wasm32-unknown-unknown` Rust target (`rustup target add wasm32-unknown-unknown`). It fails if `ora-core` gains a Tauri dependency, if `ora-types` stops building for WebAssembly, or if the TypeScript bindings in `src/native/bindings/` differ from what `cargo test -p ora-types` generates. The bindings are generated files: change the Rust types, regenerate, and stage the result.
 
 For automated native Linux acceptance, install `webkitgtk-webdriver`, Xvfb and `xdotool`, build the native debug executable and run `python3 scripts/test-native.py /absolute/path/to/melora`. The checks use disposable application data and save local screenshots in `artifacts/runtime`.
 

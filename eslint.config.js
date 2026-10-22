@@ -10,6 +10,8 @@ export default tseslint.config(
       'dist/**',
       'node_modules/**',
       'src-tauri/**',
+      'src/native/bindings/**',
+      'target/**',
       'artifacts/**',
       '*.md',
     ],
