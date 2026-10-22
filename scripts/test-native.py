@@ -478,7 +478,47 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert execute("return document.querySelector('#spotify-client-id').placeholder === 'Saved: 0123…cdef' && !document.body.innerText.includes(arguments[0]);", synthetic_id), 'Full Client ID shown in the UI'
         execute("document.querySelector('.account-settings').scrollIntoView({block: 'start'});")
         (output / 'melora-linux-settings-spotify.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+        # Embedded playback (Phase 3): the real commands over IPC while signed out, and this
+        # engine's real DRM probe. The SDK itself is never loaded here.
+        assert execute("return document.querySelector('.playback-test [role=status]').textContent;") == 'Sign in to Spotify first.', 'Playback test block missing'
+        execute("""
+            window.__playbackReview = null;
+            const invoke = window.__TAURI_INTERNALS__.invoke;
+            const rejected = (operation) => operation.then(() => null, (error) => error);
+            const config = [{initDataTypes: ['cenc'], audioCapabilities: [{contentType: 'audio/mp4; codecs="mp4a.40.2"'}]}];
+            const supports = (system) => navigator.requestMediaKeySystemAccess
+                ? navigator.requestMediaKeySystemAccess(system, config).then(() => true, () => false)
+                : Promise.resolve(false);
+            Promise.all([supports('com.widevine.alpha'), supports('com.microsoft.playready'), supports('com.apple.fps')])
+                .then(([widevine, playready, fairplay]) => {
+                    const probe = {secure: window.isSecureContext, widevine, playready, fairplay,
+                        userAgent: navigator.userAgent, platformVersion: null, webviewVersion: null};
+                    return Promise.all([
+                        rejected(invoke('plugin:ora|access_token')),
+                        rejected(invoke('plugin:ora|play_here', {link: null})),
+                        rejected(invoke('plugin:ora|playback_command', {command: {op: 'togglePlay'}})),
+                        invoke('plugin:ora|sdk_event', {event: {type: 'probe', probe}}),
+                        rejected(invoke('plugin:ora|sdk_event', {event: {type: 'nonsense'}})),
+                        probe,
+                    ]);
+                })
+                .then(results => { window.__playbackReview = results; });
+        """)
+        wait_script('return Array.isArray(window.__playbackReview);')
+        playback_review = execute('return window.__playbackReview;')
+        assert playback_review[0] == {'kind': 'signedOut'}, f'Access token not refused while signed out: {playback_review[0]}'
+        assert playback_review[1] == {'kind': 'signedOut'}, f'Play here not refused while signed out: {playback_review[1]}'
+        assert playback_review[2] == {'kind': 'noActiveDevice'}, f'Command accepted without a device: {playback_review[2]}'
+        assert playback_review[3] is None, 'Probe report refused'
+        assert playback_review[4] is not None, 'Malformed bridge report accepted'
+        engine_probe = playback_review[5]
+        assert not execute("return [...document.scripts].some(s => s.src.startsWith('https://sdk.scdn.co/'));"), 'SDK script loaded during the test'
+        assert check_device_footer()['status'] == 'Playback device: No device connected', 'Footer claims a device'
+        execute("document.querySelector('.playback-test').scrollIntoView({block: 'start'});")
+        (output / 'melora-linux-settings-playback.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         (output / 'native-acceptance.json').write_text(json.dumps({
+            'embedded_playback': 'signed-out refusals (access_token, play_here, playback_command), malformed report refused, probe accepted, no SDK script, test block shown',
+            'engine_drm_probe': {key: engine_probe[key] for key in ('secure', 'widevine', 'playready', 'fairplay')},
             'spotify_account': 'plugin status, invalid Client ID and URL rejection, masked save and Settings screenshots passed; sign-in not run',
             'platform': 'linux', 'ipc': 'passed', 'keyboard_selection': 'passed',
             'local_fonts': 'passed', 'scaling': '100–200%, 720, 1360 and 1440px',

@@ -17,8 +17,10 @@ export const featureUi = {
   SignIn: { kind: 'wired', label: 'Sign in with Spotify' },
   Profile: { kind: 'wired', label: 'Profile' },
   OpenInSpotify: { kind: 'wired', label: 'Open in Spotify' },
-  EmbeddedPlayback: phase('Playback in Melora', 3),
-  MediaKeys: phase('Media keys', 3),
+  // Settings → Playback in Melora (test): the Phase 3 spike, through the shared sdk-bridge.
+  // Media keys come from the SDK's Media Session.
+  EmbeddedPlayback: { kind: 'wired', label: 'Playback in Melora' },
+  MediaKeys: { kind: 'wired', label: 'Media keys' },
   ConnectControl: phase('Control another device', 4),
   DevicePicker: phase('Device picker', 4),
   TransferPlayback: phase('Transfer playback', 4),

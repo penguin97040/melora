@@ -1,4 +1,5 @@
 import type { OraError, SpotifyStatus } from '../native/client';
+import { featureUi } from './registry';
 
 export function isOraError(value: unknown): value is OraError {
   return (
@@ -21,9 +22,14 @@ export function describeError(
     case 'sessionExpired':
       return 'Spotify needs you to sign in again. This happens every six months, or after access is removed.';
     case 'forbidden':
-      return error.hint === 'Allowlist'
-        ? 'Spotify refused access. Check that your Spotify account is listed under User Management for your app in the Spotify Developer Dashboard.'
-        : 'Spotify refused this request.';
+      switch (error.hint) {
+        case 'Allowlist':
+          return 'Spotify refused access. Check that your Spotify account is listed under User Management for your app in the Spotify Developer Dashboard.';
+        case 'Premium':
+          return 'Spotify refused: controlling playback needs Spotify Premium.';
+        default:
+          return 'Spotify refused this request.';
+      }
     case 'rateLimited':
       return 'Spotify is limiting requests. Try again in a moment.';
     case 'quotaExceeded':
@@ -61,7 +67,9 @@ export function describeError(
       }
       break;
     case 'needsScope':
-      return 'Spotify needs additional permission for this. Sign in again to allow it.';
+      return `Spotify needs additional permission for “${featureUi[error.feature].label}”. Allow it, then approve it in your browser.`;
+    case 'invalidSpotifyLink':
+      return 'That isn’t a Spotify album, artist, playlist, show, track or episode link. In Spotify, use Share → Copy link.';
     case 'notFound':
       return 'Spotify couldn’t find that.';
     case 'noActiveDevice':

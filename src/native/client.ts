@@ -1,9 +1,13 @@
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { install } from '../../ora/sdk-bridge/sdk-bridge.js';
+import type { Bridge } from '../../ora/sdk-bridge/sdk-bridge.js';
 import type { OraError } from './bindings/OraError';
+import type { PlaybackStatus } from './bindings/PlaybackStatus';
+import type { PlayerCommand } from './bindings/PlayerCommand';
 import type { Profile } from './bindings/Profile';
 import type { Status } from './bindings/Status';
 
-export type { OraError, Profile };
+export type { OraError, PlaybackStatus, PlayerCommand, Profile };
 export type SpotifyStatus = Status;
 
 export type Preferences = {
@@ -51,8 +55,9 @@ export async function showMainWindow(): Promise<void> {
   return invoke<void>('show_main_window');
 }
 
-// Spotify account commands from the shared `ora` plugin. Tokens never reach JavaScript; these
-// calls only move status, the Client ID and validated open.spotify.com links.
+// Spotify account commands from the shared `ora` plugin. These calls only move status, the
+// Client ID and validated open.spotify.com links. The one exception is the shared sdk-bridge,
+// which asks for an access token for the Web Playback SDK's callback and never keeps it.
 const previewSpotifyStatus: SpotifyStatus = {
   auth: { kind: 'notConfigured' },
   clientIdFromEnvironment: false,
@@ -90,6 +95,14 @@ export async function signInWithSpotify(): Promise<SpotifyStatus> {
   return invoke<SpotifyStatus>('plugin:ora|sign_in');
 }
 
+/** Signs in again, asking Spotify for the extra permission embedded playback needs. */
+export async function allowPlayback(): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|sign_in', {
+    feature: 'EmbeddedPlayback',
+  });
+}
+
 export async function cancelSpotifySignIn(): Promise<SpotifyStatus> {
   requireDesktop();
   return invoke<SpotifyStatus>('plugin:ora|cancel_sign_in');
@@ -110,6 +123,65 @@ export async function loadSpotifyProfile(): Promise<Profile | null> {
 export async function openInSpotify(url: string): Promise<void> {
   requireDesktop();
   return invoke<void>('plugin:ora|open_in_spotify', { url });
+}
+
+// Embedded playback (Phase 3 spike) through the shared Web Playback SDK bridge.
+const previewPlaybackStatus: PlaybackStatus = {
+  tier: 'off',
+  nowPlaying: null,
+  paused: true,
+  positionMs: 0,
+  durationMs: 0,
+  updatedAtMs: 0,
+  issue: null,
+  probe: null,
+  cspBlocks: [],
+};
+let bridge: Bridge | null = null;
+
+function playbackBridge(volume: number): Bridge {
+  requireDesktop();
+  bridge ??= install({ invoke, Channel, name: 'Melora', volume });
+  return bridge;
+}
+
+/** Calls `onStatus` with the current playback status and then every change. */
+export async function subscribePlayback(
+  onStatus: (status: PlaybackStatus) => void,
+): Promise<void> {
+  if (!isTauri()) {
+    onStatus(previewPlaybackStatus);
+    return;
+  }
+  const channel = new Channel<PlaybackStatus>();
+  channel.onmessage = onStatus;
+  await invoke<void>('plugin:ora|subscribe_playback', { onStatus: channel });
+}
+
+/** Checks DRM support, then loads Spotify's player. Resolves whether Melora became a device. */
+export async function enablePlayback(volume: number): Promise<boolean> {
+  return playbackBridge(volume).enable();
+}
+
+/** Must run synchronously inside the click that starts playback. */
+export function activatePlayback(): void {
+  bridge?.activate();
+}
+
+/** Plays the pasted Spotify link here, or moves what was last playing to Melora. */
+export async function playHere(link: string): Promise<void> {
+  requireDesktop();
+  const trimmed = link.trim();
+  return invoke<void>('plugin:ora|play_here', {
+    link: trimmed === '' ? null : trimmed,
+  });
+}
+
+export async function sendPlaybackCommand(
+  command: PlayerCommand,
+): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|playback_command', { command });
 }
 
 export type WindowChrome = 'custom' | 'macos' | 'preview';

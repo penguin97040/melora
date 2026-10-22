@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { PlaybackTest } from './components/PlaybackTest';
 import { Player } from './components/Player';
 import { SpotifyAccount } from './components/SpotifyAccount';
 import { WindowHeader } from './components/WindowHeader';
@@ -12,10 +13,12 @@ import {
   openInSpotify,
   savePreferences,
   showMainWindow,
+  subscribePlayback,
   subscribeSpotify,
 } from './native/client';
 import type {
   AppInfo,
+  PlaybackStatus,
   Preferences,
   SpotifyStatus,
   WindowChrome,
@@ -52,6 +55,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [preferencesSettled, setPreferencesSettled] = useState(false);
   const [spotify, setSpotify] = useState<SpotifyStatus | null>(null);
+  const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
   // Keyed to the URL, so a new profile or account gets a fresh attempt.
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const revealRequested = useRef(false);
@@ -112,6 +116,21 @@ export default function App() {
       if (active)
         setWindowMessage(
           'The Spotify connection status could not be loaded. Relaunch Melora to try again.',
+        );
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void subscribePlayback((status) => {
+      if (active) setPlayback(status);
+    }).catch(() => {
+      if (active)
+        setWindowMessage(
+          'The playback status could not be loaded. Relaunch Melora to try again.',
         );
     });
     return () => {
@@ -337,6 +356,13 @@ export default function App() {
                   : 'Browser preview: preferences last for this session. The desktop app saves them on this device.'}
               </p>
               <SpotifyAccount status={spotify} />
+              {playback && (
+                <PlaybackTest
+                  spotify={spotify}
+                  playback={playback}
+                  volume={preferences.volume}
+                />
+              )}
             </section>
           ) : (
             <>
@@ -473,7 +499,10 @@ export default function App() {
           </span>
         )}
         <span className="playback-device">
-          Playback device: <span>No device connected</span>
+          Playback device:{' '}
+          <span>
+            {playback?.tier === 'active' ? 'This app' : 'No device connected'}
+          </span>
         </span>
         <span className="stream-quality">Stream quality: unavailable</span>
         <span role="status">
