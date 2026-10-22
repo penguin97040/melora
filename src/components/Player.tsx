@@ -1,8 +1,9 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import type { PreviewTrack } from '../preview';
 import type { PlaybackStatus, PlayerCommand } from '../native/client';
 import type { RepeatMode } from '../native/bindings/RepeatMode';
-import { formatTime } from '../features/playback';
+import { formatTime, isLive, isRemote } from '../features/playback';
 import { usePlaybackPosition } from '../features/usePlaybackPosition';
 import {
   NextIcon,
@@ -24,44 +25,65 @@ const nextRepeat: Record<RepeatMode, RepeatMode> = {
   track: 'off',
 };
 
+const restrictedAll = {
+  pause: true,
+  resume: true,
+  next: true,
+  previous: true,
+  seek: true,
+};
+
 export function Player({
   track,
   playback,
+  devicePicker,
   onCommand,
   onOpenInSpotify,
 }: {
   track: PreviewTrack;
   playback: PlaybackStatus | null;
+  /** The Playback device line, in the slot the approved layout reserves for it. */
+  devicePicker: ReactNode;
   onCommand: (command: PlayerCommand) => void;
   onOpenInSpotify: (url: string) => void;
 }) {
-  // While Melora is the active Spotify device, the panel shows the real item and controls.
-  // Otherwise it stays the labelled synthetic preview.
-  if (playback?.tier === 'active') {
+  // While a Spotify device is active (Melora itself or another one), the panel shows the
+  // real item and controls. Otherwise it stays the labelled synthetic preview.
+  if (playback && isLive(playback)) {
     return (
       <LivePlayer
         playback={playback}
+        devicePicker={devicePicker}
         onCommand={onCommand}
         onOpenInSpotify={onOpenInSpotify}
       />
     );
   }
-  return <PreviewPlayer track={track} />;
+  return <PreviewPlayer track={track} devicePicker={devicePicker} />;
 }
 
 function LivePlayer({
   playback,
+  devicePicker,
   onCommand,
   onOpenInSpotify,
 }: {
   playback: PlaybackStatus;
+  devicePicker: ReactNode;
   onCommand: (command: PlayerCommand) => void;
   onOpenInSpotify: (url: string) => void;
 }) {
   const position = usePlaybackPosition(playback);
   // The slider's value while it's being dragged; the seek is sent on release only.
   const [dragging, setDragging] = useState<number | null>(null);
-  const { nowPlaying, paused, disallows } = playback;
+  const { nowPlaying, paused } = playback;
+  const remote = isRemote(playback);
+  // Spotify accepts no commands for a restricted device, so every control is disabled.
+  const restricted = remote && playback.device?.restricted === true;
+  const disallows = restricted ? restrictedAll : playback.disallows;
+  const place = remote
+    ? `on ${playback.device?.name || 'another device'}`
+    : 'in Melora';
   const repeat = repeatLabel[playback.repeat];
   const shown = dragging ?? position;
   const playDisabled = paused ? disallows.resume : disallows.pause;
@@ -98,7 +120,7 @@ function LivePlayer({
       </div>
       <div className="player-body">
         <p className="eyebrow">
-          {paused ? 'Paused in Melora' : 'Playing in Melora'}
+          {paused ? 'Paused' : 'Playing'} {place}
         </p>
         <h2 className="track-title">{nowPlaying?.name ?? 'Spotify'}</h2>
         <p className="artist-name">{nowPlaying?.artists.join(', ')}</p>
@@ -143,6 +165,7 @@ function LivePlayer({
             className={playback.shuffle ? 'mode-active' : ''}
             aria-label={`Shuffle: ${playback.shuffle ? 'On' : 'Off'}`}
             aria-pressed={playback.shuffle}
+            disabled={restricted}
             onClick={() =>
               onCommand({ op: 'setShuffle', state: !playback.shuffle })
             }
@@ -175,6 +198,7 @@ function LivePlayer({
             className={repeat !== 'Off' ? 'mode-active' : ''}
             aria-label={`Repeat: ${repeat}`}
             aria-pressed={repeat !== 'Off'}
+            disabled={restricted}
             onClick={() =>
               onCommand({ op: 'setRepeat', mode: nextRepeat[playback.repeat] })
             }
@@ -185,17 +209,26 @@ function LivePlayer({
         <p className="mode-status" role="status">
           Shuffle: {playback.shuffle ? 'On' : 'Off'} · Repeat: {repeat}
         </p>
-        <div className="player-device-spacer" aria-hidden="true" />
+        {devicePicker}
         <p className="player-footnote">
-          Playing through Spotify in Melora. Track details and artwork come from
-          Spotify.
+          {restricted
+            ? 'Spotify doesn’t allow controlling this device from other apps.'
+            : remote
+              ? 'Spotify plays on another device. Track details and artwork come from Spotify.'
+              : 'Playing through Spotify in Melora. Track details and artwork come from Spotify.'}
         </p>
       </div>
     </aside>
   );
 }
 
-function PreviewPlayer({ track }: { track: PreviewTrack }) {
+function PreviewPlayer({
+  track,
+  devicePicker,
+}: {
+  track: PreviewTrack;
+  devicePicker: ReactNode;
+}) {
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<'Off' | 'All' | 'Song'>('Off');
 
@@ -273,7 +306,7 @@ function PreviewPlayer({ track }: { track: PreviewTrack }) {
         <p className="mode-status" role="status">
           Shuffle: {shuffle ? 'On' : 'Off'} · Repeat: {repeat}
         </p>
-        <div className="player-device-spacer" aria-hidden="true" />
+        {devicePicker}
         <p className="player-footnote" id="preview-modes-note">
           Shuffle and repeat are preview selections only; track order and audio
           are unchanged. Modes reset on relaunch. Real playback shows here once

@@ -76,9 +76,11 @@ export function PlaybackTest({
     >
       <h2 id="playback-test-heading">Playback in Melora (test)</h2>
       <p className="settings-note">
-        Plays Spotify inside Melora. It needs Spotify Premium. While Melora is
-        playing, the song and its controls appear in the player on the right,
-        and the Volume setting above controls it.
+        Plays Spotify inside Melora. It needs Spotify Premium. Once allowed,
+        Melora turns this on each time it opens. The song and its controls
+        appear in the player on the right, and the Volume setting above controls
+        Melora. To move the music to another device, use Choose device in the
+        player.
       </p>
       <p className="account-state" role="status">
         {!signedIn

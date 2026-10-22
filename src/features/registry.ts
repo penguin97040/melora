@@ -21,11 +21,12 @@ export const featureUi = {
   // Media keys come from the SDK's Media Session.
   EmbeddedPlayback: { kind: 'wired', label: 'Playback in Melora' },
   MediaKeys: { kind: 'wired', label: 'Media keys' },
-  ConnectControl: phase('Control another device', 4),
-  DevicePicker: phase('Device picker', 4),
-  TransferPlayback: phase('Transfer playback', 4),
-  // The right-hand player while Melora itself plays (Tier A, brought forward from Phase 5).
-  // Volume is the Settings slider. Remote devices arrive with Phase 4.
+  // The right-hand player's Playback device line and its device list (Tier B, Phase 4).
+  ConnectControl: { kind: 'wired', label: 'Control another device' },
+  DevicePicker: { kind: 'wired', label: 'Device picker' },
+  TransferPlayback: { kind: 'wired', label: 'Transfer playback' },
+  // The right-hand player, for Melora itself (Tier A) or another device (Tier B). Volume is
+  // the Settings slider for Melora and the device list's slider for another device.
   PlayPause: { kind: 'wired', label: 'Play and pause' },
   SkipNextPrevious: { kind: 'wired', label: 'Next and previous' },
   Seek: { kind: 'wired', label: 'Seek' },

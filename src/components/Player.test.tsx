@@ -7,6 +7,7 @@ import type { PlaybackStatus } from '../native/client';
 import { previewTracks } from '../preview';
 
 const track = previewTracks[0]!;
+const slot = <div data-testid="device-slot" />;
 
 function live(extra: Partial<PlaybackStatus> = {}): PlaybackStatus {
   return playbackStatus({
@@ -33,6 +34,7 @@ function renderPlayer(playback: PlaybackStatus | null) {
     <Player
       track={track}
       playback={playback}
+      devicePicker={slot}
       onCommand={onCommand}
       onOpenInSpotify={onOpenInSpotify}
     />,
@@ -51,11 +53,13 @@ describe('player panel', () => {
         <Player
           track={track}
           playback={playback}
+          devicePicker={slot}
           onCommand={vi.fn()}
           onOpenInSpotify={vi.fn()}
         />,
       );
       expect(screen.getByLabelText('Player preview')).toBeInTheDocument();
+      expect(screen.getByTestId('device-slot')).toBeInTheDocument();
       expect(screen.getByText(track.title)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
       unmount();
@@ -136,6 +140,57 @@ describe('player panel', () => {
     fireEvent.pointerUp(slider);
     expect(onCommand).toHaveBeenCalledTimes(1);
     expect(onCommand).toHaveBeenCalledWith({ op: 'seek', positionMs: 90_000 });
+  });
+
+  it('shows and controls another active device', async () => {
+    const { onCommand } = renderPlayer(
+      live({
+        tier: 'ready',
+        device: {
+          key: '0123456789abcdef',
+          name: 'Kitchen',
+          kind: 'speaker',
+          active: true,
+          restricted: false,
+          thisApp: false,
+          supportsVolume: true,
+          volumePercent: 40,
+        },
+      }),
+    );
+    expect(screen.getByLabelText('Player')).toBeInTheDocument();
+    expect(screen.getByText('Playing on Kitchen')).toBeInTheDocument();
+    expect(screen.getByText(/Spotify plays on another device/)).toBeVisible();
+    expect(screen.getByTestId('device-slot')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(onCommand).toHaveBeenCalledWith({ op: 'togglePlay' });
+  });
+
+  it('disables every control for a restricted device', () => {
+    renderPlayer(
+      live({
+        tier: 'off',
+        device: {
+          key: '0123456789abcdef',
+          name: 'Car',
+          kind: 'automobile',
+          active: true,
+          restricted: true,
+          thisApp: false,
+          supportsVolume: false,
+          volumePercent: null,
+        },
+      }),
+    );
+    const controls = screen.getByRole('group', { name: 'Player controls' });
+    for (const button of controls.querySelectorAll('button'))
+      expect(button).toBeDisabled();
+    expect(screen.getByLabelText('Track position')).toBeDisabled();
+    expect(
+      screen.getByText(
+        'Spotify doesn’t allow controlling this device from other apps.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('shows a plain square when there is no allowed artwork', () => {

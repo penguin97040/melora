@@ -1,16 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
+import { DevicePicker } from './components/DevicePicker';
 import { PlaybackTest } from './components/PlaybackTest';
 import { Player } from './components/Player';
 import { SpotifyAccount } from './components/SpotifyAccount';
 import { WindowHeader } from './components/WindowHeader';
 import { accountName, profileRetryable } from './features/account';
 import {
+  deviceControlAllowed,
+  isRemote,
+  playbackAllowed,
+} from './features/playback';
+import {
   defaultPreferences,
+  enablePlayback,
   getAppInfo,
   getWindowChrome,
   hasNativeStorage,
   loadSpotifyProfile,
   openInSpotify,
+  refreshPlayback,
   savePreferences,
   sendPlaybackCommand,
   showMainWindow,
@@ -43,6 +51,21 @@ function connectionLabel(status: SpotifyStatus | null): string {
 
 type View = 'Library' | 'Search' | 'Settings';
 const initialTrack = previewTracks[0]!;
+/** While Melora isn't playing itself, the active device is read this often (DO_NEXT §4.5). */
+export const REMOTE_REFRESH_MS = 30_000;
+/** A remote track change shows this long after the track should have ended. */
+const TRACK_END_GRACE_MS = 1_500;
+
+/** Background reads: a failure here shows nothing and the next trigger tries again. */
+function quietly(action: () => Promise<unknown>): void {
+  void (async () => {
+    try {
+      await action();
+    } catch {
+      // Settings and the device list show errors when the user acts.
+    }
+  })();
+}
 
 export default function App() {
   const [view, setView] = useState<View>('Library');
@@ -62,6 +85,7 @@ export default function App() {
   // Keyed to the URL, so a new profile or account gets a fresh attempt.
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const revealRequested = useRef(false);
+  const launchEnabled = useRef(false);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -180,11 +204,71 @@ export default function App() {
   }, [view]);
 
   const deviceReady = playback?.tier === 'ready' || playback?.tier === 'active';
+  const hereActive = playback?.tier === 'active';
+  const remoteActive = isRemote(playback);
+  const canControl = deviceControlAllowed(spotify);
+  const mayPlayHere = playbackAllowed(spotify);
+  const tier = playback?.tier;
+
+  useEffect(() => {
+    // Once playback is allowed, Melora becomes a Spotify device at launch, so it's always in
+    // the device lists. Problems show in Settings → Playback in Melora.
+    if (!mayPlayHere || !preferencesSettled || tier !== 'off') return;
+    if (launchEnabled.current) return;
+    launchEnabled.current = true;
+    quietly(() => enablePlayback(preferences.volume / 100));
+  }, [mayPlayHere, preferencesSettled, tier, preferences.volume]);
+
+  useEffect(() => {
+    // The active device is read when control becomes possible, on focus, and at a low rate
+    // while Melora is visible and not playing itself. Never per second.
+    if (!canControl) return;
+    const refresh = () => {
+      if (document.visibilityState === 'visible') quietly(refreshPlayback);
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    const timer = hereActive
+      ? undefined
+      : window.setInterval(refresh, REMOTE_REFRESH_MS);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      if (timer !== undefined) window.clearInterval(timer);
+    };
+  }, [canControl, hereActive]);
+
+  const remotePlaying =
+    remoteActive &&
+    playback !== null &&
+    !playback.paused &&
+    playback.durationMs > 0;
+  const positionMs = playback?.positionMs ?? 0;
+  const durationMs = playback?.durationMs ?? 0;
+  const updatedAtMs = playback?.updatedAtMs ?? 0;
+  useEffect(() => {
+    // Another device moves to its next track without telling Melora, so read it again just
+    // after this one should have ended (and no more often than every 10 s past the end).
+    if (!remotePlaying) return;
+    const left = durationMs - positionMs - (Date.now() - updatedAtMs);
+    const timer = window.setTimeout(
+      () => quietly(refreshPlayback),
+      left > 0 ? left + TRACK_END_GRACE_MS : 10_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [remotePlaying, positionMs, durationMs, updatedAtMs]);
 
   function playerCommand(command: PlayerCommand): void {
     void sendPlaybackCommand(command).catch((error: unknown) =>
       setWindowMessage(describeFailure(error)),
     );
+  }
+
+  /** Melora's own volume: saved as the preference and sent to its player when it's on. */
+  function setMeloraVolume(volume: number): void {
+    updatePreferences({ ...preferences, volume });
+    // While another device plays, commands go to it; Melora's player keeps the preference.
+    if (deviceReady && !remoteActive)
+      playerCommand({ op: 'setVolume', volume: volume / 100 });
   }
 
   function openSpotifyPage(url: string): void {
@@ -360,12 +444,7 @@ export default function App() {
                 max="100"
                 value={preferences.volume}
                 disabled={!ready}
-                onChange={(e) => {
-                  const volume = Number(e.target.value);
-                  updatePreferences({ ...preferences, volume });
-                  if (deviceReady)
-                    playerCommand({ op: 'setVolume', volume: volume / 100 });
-                }}
+                onChange={(e) => setMeloraVolume(Number(e.target.value))}
               />
               <p className="settings-note">
                 {hasNativeStorage()
@@ -478,6 +557,16 @@ export default function App() {
         <Player
           track={selected}
           playback={playback}
+          devicePicker={
+            <DevicePicker
+              spotify={spotify}
+              playback={playback}
+              volume={preferences.volume}
+              onVolume={setMeloraVolume}
+              onCommand={playerCommand}
+              onOpenSettings={() => setView('Settings')}
+            />
+          }
           onCommand={playerCommand}
           onOpenInSpotify={openSpotifyPage}
         />
@@ -523,7 +612,11 @@ export default function App() {
         <span className="playback-device">
           Playback device:{' '}
           <span>
-            {playback?.tier === 'active' ? 'This app' : 'No device connected'}
+            {hereActive || playback?.device?.thisApp
+              ? 'This app'
+              : remoteActive
+                ? playback?.device?.name || 'Spotify device'
+                : 'No device connected'}
           </span>
         </span>
         <span className="stream-quality">Stream quality: unavailable</span>

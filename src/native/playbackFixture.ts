@@ -6,6 +6,7 @@ export function playbackStatus(
 ): PlaybackStatus {
   return {
     tier: 'off',
+    device: null,
     nowPlaying: null,
     paused: true,
     positionMs: 0,

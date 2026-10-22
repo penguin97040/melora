@@ -601,20 +601,84 @@ input[type='range'] {
 .transport .play-button {
   border: 1px solid var(--border);
 }
-.player-device-spacer {
-  /* Reserve the former label/status lines, gap and divider height. */
-  padding-top: calc(var(--player-gap) + 1px);
+/* The Playback device line: a label and one line, in the approved layout's reserved slot. */
+.player-device {
+  padding-top: var(--player-gap);
+  border-top: 1px solid var(--border);
   font-size: 0.8125rem;
 }
-.player-device-spacer::before,
-.player-device-spacer::after {
-  content: '';
+.player-device .eyebrow {
   display: block;
-  height: 1lh;
 }
-.player-device-spacer::before {
+.player-device-line {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+.player-device-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Fixed beside the player (never over the artwork), so the layout doesn't move. */
+.device-popover {
+  position: fixed;
+  z-index: 20;
+  width: min(18rem, calc(100vw - 1rem));
+  overflow-y: auto;
+  padding: 0.85rem;
+  background: var(--surface-content);
+  border: 1px solid var(--border);
+  white-space: normal;
+}
+.device-popover:focus:not(:focus-visible) {
+  outline: none;
+}
+.device-popover .eyebrow {
+  margin-bottom: 0.5rem;
+}
+.device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+.device-option {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.6rem;
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+  background: var(--control);
+  border-left: 2px solid transparent;
+  overflow-wrap: anywhere;
+}
+.device-option:hover:not(:disabled) {
+  background: var(--surface-raised);
+}
+.device-option[aria-current='true'] {
+  color: var(--active-mode);
+  border-left-color: currentColor;
+}
+.device-detail,
+.device-hint {
+  color: var(--muted);
   font-size: 0.75rem;
-  margin-bottom: 0.75rem;
+  line-height: 1.5;
+}
+.device-hint,
+.device-action,
+.device-error {
+  margin-top: 0.6rem;
+}
+.device-volume {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 .player-footnote {
   color: var(--muted);

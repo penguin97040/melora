@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { PlaybackStatus } from '../native/client';
-import { positionAt } from './playback';
+import { isLive, positionAt } from './playback';
 
 /** The current position, ticking locally once a second while playing (no Spotify requests). */
 export function usePlaybackPosition(status: PlaybackStatus | null): number {
   const [now, setNow] = useState(() => Date.now());
-  const playing = status?.tier === 'active' && !status.paused;
+  const playing = status !== null && isLive(status) && !status.paused;
   const reported = status?.updatedAtMs;
   useEffect(() => {
     // Until the first tick, a stale clock only means no elapsed time (never negative).

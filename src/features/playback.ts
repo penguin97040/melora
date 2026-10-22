@@ -1,4 +1,8 @@
-import type { PlaybackStatus, SpotifyStatus } from '../native/client';
+import type {
+  DeviceKind,
+  PlaybackStatus,
+  SpotifyStatus,
+} from '../native/client';
 import type { PlaybackIssue } from '../native/bindings/PlaybackIssue';
 
 /** The sign-in covers the scopes embedded playback needs. */
@@ -8,6 +12,48 @@ export function playbackAllowed(status: SpotifyStatus | null): boolean {
     status.auth.granted.includes('EmbeddedPlayback')
   );
 }
+
+/** The sign-in covers seeing and controlling the account's Spotify devices. */
+export function deviceControlAllowed(status: SpotifyStatus | null): boolean {
+  return (
+    status?.auth.kind === 'signedIn' &&
+    status.auth.granted.includes('ConnectControl')
+  );
+}
+
+/** Something is active: Melora itself, or another device Melora controls. */
+export function isLive(status: PlaybackStatus): boolean {
+  return status.tier === 'active' || status.device !== null;
+}
+
+/** Another device is active, not Melora. */
+export function isRemote(status: PlaybackStatus | null): boolean {
+  return (
+    status !== null &&
+    status.tier !== 'active' &&
+    status.device !== null &&
+    !status.device.thisApp
+  );
+}
+
+/** The active device's name, as the player and the footer show it. */
+export function deviceName(status: PlaybackStatus | null): string {
+  if (!status || !isLive(status)) return 'No device connected';
+  if (status.tier === 'active' || status.device?.thisApp)
+    return 'Melora (this app)';
+  return status.device?.name || 'Spotify device';
+}
+
+export const deviceKindLabel: Record<DeviceKind, string> = {
+  computer: 'Computer',
+  smartphone: 'Phone',
+  tablet: 'Tablet',
+  speaker: 'Speaker',
+  tv: 'TV',
+  gameConsole: 'Game console',
+  automobile: 'Car',
+  other: 'Device',
+};
 
 export function tierLine(status: PlaybackStatus): string {
   switch (status.tier) {
@@ -72,7 +118,7 @@ export function diagnosticsLine(status: PlaybackStatus): string | null {
 
 /** The position now, interpolated from the last report while playing. */
 export function positionAt(status: PlaybackStatus, nowMs: number): number {
-  if (status.tier !== 'active' || status.paused) return status.positionMs;
+  if (!isLive(status) || status.paused) return status.positionMs;
   const elapsed = Math.max(0, nowMs - status.updatedAtMs);
   return Math.min(status.durationMs, status.positionMs + elapsed);
 }

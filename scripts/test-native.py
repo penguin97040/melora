@@ -125,7 +125,8 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             result = execute("""
                 const footer = document.querySelector('.status-strip');
                 const device = footer.querySelector('.playback-device');
-                const spacer = document.querySelector('.player-device-spacer');
+                const slot = document.querySelector('.player .player-device');
+                const line = slot.querySelector('.player-device-line');
                 const bounds = footer.getBoundingClientRect();
                 const range = document.createRange();
                 const textVisible = [...footer.children].every(item => {
@@ -134,25 +135,49 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                         box.left >= bounds.left && box.right <= bounds.right &&
                         box.top >= bounds.top && box.bottom <= bounds.bottom);
                 });
-                const css = getComputedStyle(spacer);
+                const css = getComputedStyle(slot);
                 const scale = parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
                 return {textVisible, footerHeight: bounds.height,
                     ordered: footer.children[0].textContent.includes('Synthetic preview') &&
                         footer.children[1] === device && footer.children[2].className === 'stream-quality',
                     status: device.textContent.trim().replace(/\\s+/g, ' '),
-                    spacerHeight: spacer.getBoundingClientRect().height,
-                    minimumSpace: 40 * scale + parseFloat(css.paddingTop),
-                    blank: spacer.textContent === '' && spacer.children.length === 0 &&
-                        spacer.getAttribute('aria-hidden') === 'true' && spacer.tabIndex === -1 &&
-                        css.borderTopWidth === '0px',
-                    playerDeviceAbsent: !document.querySelector('.player').textContent.includes('No device connected')};
+                    slotHeight: slot.getBoundingClientRect().height,
+                    minimumSpace: 40 * scale + parseFloat(css.paddingTop) + parseFloat(css.borderTopWidth),
+                    divider: css.borderTopWidth === '1px',
+                    slotLine: line.textContent.replace(/\\s+/g, ' ').trim(),
+                    oneLine: line.getBoundingClientRect().height < 1.6 * parseFloat(getComputedStyle(line).fontSize)};
             """)
             assert result['ordered'] and result['status'] == 'Playback device: No device connected', 'Device status misplaced or changed'
             assert result['textVisible'], f'Footer text clipped: {result}'
-            assert result['blank'] and result['playerDeviceAbsent'], 'Former device area is not blank/non-interactive'
-            assert result['spacerHeight'] >= result['minimumSpace'] - 1, f'Former device space collapsed: {result}'
+            # The player's reserved device slot holds the Playback device line (owner's choice,
+            # 22/10/2026): a divider, a label and one line, in the space the layout kept for it.
+            assert result['divider'] and result['oneLine'], f'Device line wrapped or lost its divider: {result}'
+            assert result['slotLine'] == 'No device connected · Choose device', f'Device line wrong: {result}'
+            assert result['slotHeight'] >= result['minimumSpace'] - 1, f'Device slot collapsed: {result}'
+            return result
+        def check_device_list():
+            # The list opens beside the player (never over the artwork), inside the window,
+            # with the sign-in hint while signed out, and Escape returns focus to the button.
+            execute("document.querySelector('.player-device .link-button').click();")
+            wait_script("return !!document.querySelector('.device-popover');")
+            result = execute("""
+                const popover = document.querySelector('.device-popover');
+                const box = popover.getBoundingClientRect();
+                const art = document.querySelector('.player-artwork').getBoundingClientRect();
+                const overlaps = box.left < art.right && box.right > art.left && box.top < art.bottom && box.bottom > art.top;
+                return {inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+                    overArtwork: overlaps, focused: document.activeElement === popover,
+                    text: popover.textContent, layoutKept: document.querySelector('.player').scrollHeight <= document.querySelector('.player').clientHeight + 1};
+            """)
+            (output / 'melora-linux-device-list.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+            assert result['inside'] and not result['overArtwork'] and result['focused'] and result['layoutKept'], f'Device list placement wrong: {result}'
+            assert 'Sign in with Spotify in Settings to choose a device.' in result['text'], f'Device list hint wrong: {result}'
+            execute("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));")
+            wait_script("return !document.querySelector('.device-popover');")
+            assert execute("return document.activeElement === document.querySelector('.player-device .link-button');"), 'Focus not returned after Escape'
             return result
         device_footer = check_device_footer()
+        device_list = check_device_list()
         (output / 'melora-linux-preferred.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         def artwork_geometry():
             return execute("""
@@ -546,11 +571,13 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 noSynthetic: !player.textContent.toLowerCase().includes('synthetic'),
                 plainArtwork: !!player.querySelector('.cover-art[aria-label="No artwork"]') && !player.querySelector('.cover'),
                 fits: player.scrollHeight <= player.clientHeight + 1,
+                deviceLine: player.querySelector('.player-device-line').textContent.replace(/\\s+/g, ' ').trim(),
                 device: document.querySelector('.playback-device').textContent.trim().replace(/\\s+/g, ' ')};
         """)
         assert live_player == {'title': 'Native test track', 'pauseEnabled': True, 'nextDisabled': True,
                                'previousEnabled': True, 'seekEnabled': True, 'openInSpotify': True,
                                'noSynthetic': True, 'plainArtwork': True, 'fits': True,
+                               'deviceLine': 'Melora (this app) · Choose device',
                                'device': 'Playback device: This app'}, f'Live player wrong: {live_player}'
         (output / 'melora-linux-live-player.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         execute("""
@@ -571,6 +598,8 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             'local_fonts': 'passed', 'scaling': '100–200%, 720, 1360 and 1440px',
             'status_strip': 'visible', 'preferences_relaunch': 'passed',
             'device_footer': device_footer,
+            'device_list': 'signed out: opens beside the player inside the window, not over the artwork, layout unchanged, sign-in hint, Escape returns focus',
+            'device_list_placement': {key: device_list[key] for key in ('inside', 'overArtwork', 'layoutKept')},
             'brand_icon': 'loaded', 'artwork_geometry': artwork, 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
             'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar',
             'preview_modes': 'keyboard toggle/cycle, navigation retention and relaunch reset passed',

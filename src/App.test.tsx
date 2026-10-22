@@ -2,15 +2,19 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import App from './App';
+import App, { REMOTE_REFRESH_MS } from './App';
 import {
+  enablePlayback,
   getAppInfo,
   getWindowChrome,
+  refreshPlayback,
   savePreferences,
   showMainWindow,
   subscribePlayback,
+  subscribeSpotify,
 } from './native/client';
-import type { AppInfo } from './native/client';
+import type { AppInfo, SpotifyStatus } from './native/client';
+import type { Feature } from './native/bindings/Feature';
 import { playbackStatus } from './native/playbackFixture';
 
 vi.mock('./native/client', () => ({
@@ -43,7 +47,21 @@ vi.mock('./native/client', () => ({
   enablePlayback: vi.fn(),
   playHere: vi.fn(),
   sendPlaybackCommand: vi.fn(),
+  refreshPlayback: vi.fn(),
+  listDevices: vi.fn(),
+  transferPlayback: vi.fn(),
+  allowDeviceControl: vi.fn(),
 }));
+
+function signedIn(granted: Feature[]): SpotifyStatus {
+  return {
+    auth: { kind: 'signedIn', profile: null, sessionOnly: false, granted },
+    clientIdFromEnvironment: false,
+    clientIdHint: null,
+    lastError: null,
+    redirectUri: 'http://127.0.0.1:43821/callback',
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,6 +74,8 @@ beforeEach(() => {
   });
   vi.mocked(savePreferences).mockImplementation(async (value) => value);
   vi.mocked(showMainWindow).mockResolvedValue(undefined);
+  vi.mocked(refreshPlayback).mockResolvedValue(undefined);
+  vi.mocked(enablePlayback).mockResolvedValue(true);
 });
 
 describe('preview shell', () => {
@@ -361,5 +381,76 @@ describe('playback device footer', () => {
     render(<App />);
     expect(await screen.findByText('This app')).toBeInTheDocument();
     expect(screen.queryByText('No device connected')).not.toBeInTheDocument();
+  });
+
+  it('names another device while Melora controls it', async () => {
+    vi.mocked(subscribePlayback).mockImplementationOnce(async (onStatus) =>
+      onStatus(
+        playbackStatus({
+          tier: 'ready',
+          paused: false,
+          device: {
+            key: '0123456789abcdef',
+            name: 'Kitchen',
+            kind: 'speaker',
+            active: true,
+            restricted: false,
+            thisApp: false,
+            supportsVolume: true,
+            volumePercent: 40,
+          },
+        }),
+      ),
+    );
+    render(<App />);
+    const footer = await screen.findByRole('contentinfo');
+    await waitFor(() =>
+      expect(within(footer).getByText('Kitchen')).toBeInTheDocument(),
+    );
+    expect(screen.getByText('Playing on Kitchen')).toBeInTheDocument();
+  });
+});
+
+describe('device control', () => {
+  it('reads the active device on sign-in, on focus and at a low rate', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) =>
+        onStatus(signedIn(['SignIn', 'ConnectControl'])),
+      );
+      render(<App />);
+      await waitFor(() => expect(refreshPlayback).toHaveBeenCalledTimes(1));
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      expect(refreshPlayback).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        vi.advanceTimersByTime(REMOTE_REFRESH_MS);
+      });
+      expect(refreshPlayback).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never reads devices without the permission', async () => {
+    render(<App />);
+    await screen.findByText('Set up Spotify');
+    expect(refreshPlayback).not.toHaveBeenCalled();
+  });
+
+  it('turns Melora’s playback on at launch once it is allowed', async () => {
+    // Strict Mode subscribes twice.
+    const allowed = signedIn(['SignIn', 'EmbeddedPlayback', 'ConnectControl']);
+    vi.mocked(subscribeSpotify)
+      .mockImplementationOnce(async (onStatus) => onStatus(allowed))
+      .mockImplementationOnce(async (onStatus) => onStatus(allowed));
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(enablePlayback).toHaveBeenCalledTimes(1));
+    expect(enablePlayback).toHaveBeenCalledWith(0.7);
   });
 });

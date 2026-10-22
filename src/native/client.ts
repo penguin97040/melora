@@ -1,13 +1,22 @@
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { install } from '../../ora/sdk-bridge/sdk-bridge.js';
 import type { Bridge } from '../../ora/sdk-bridge/sdk-bridge.js';
+import type { Device } from './bindings/Device';
+import type { DeviceKind } from './bindings/DeviceKind';
 import type { OraError } from './bindings/OraError';
 import type { PlaybackStatus } from './bindings/PlaybackStatus';
 import type { PlayerCommand } from './bindings/PlayerCommand';
 import type { Profile } from './bindings/Profile';
 import type { Status } from './bindings/Status';
 
-export type { OraError, PlaybackStatus, PlayerCommand, Profile };
+export type {
+  Device,
+  DeviceKind,
+  OraError,
+  PlaybackStatus,
+  PlayerCommand,
+  Profile,
+};
 export type SpotifyStatus = Status;
 
 export type Preferences = {
@@ -103,6 +112,14 @@ export async function allowPlayback(): Promise<SpotifyStatus> {
   });
 }
 
+/** Signs in again, asking Spotify for permission to see and control the account's devices. */
+export async function allowDeviceControl(): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|sign_in', {
+    feature: 'ConnectControl',
+  });
+}
+
 export async function cancelSpotifySignIn(): Promise<SpotifyStatus> {
   requireDesktop();
   return invoke<SpotifyStatus>('plugin:ora|cancel_sign_in');
@@ -125,9 +142,11 @@ export async function openInSpotify(url: string): Promise<void> {
   return invoke<void>('plugin:ora|open_in_spotify', { url });
 }
 
-// Embedded playback (Phase 3 spike) through the shared Web Playback SDK bridge.
+// Embedded playback (Phase 3) through the shared Web Playback SDK bridge, and control of other
+// Spotify devices (Phase 4) through the Web API in Rust.
 const previewPlaybackStatus: PlaybackStatus = {
   tier: 'off',
+  device: null,
   nowPlaying: null,
   paused: true,
   positionMs: 0,
@@ -191,6 +210,24 @@ export async function sendPlaybackCommand(
 ): Promise<void> {
   requireDesktop();
   return invoke<void>('plugin:ora|playback_command', { command });
+}
+
+/** Reads which device is active and what it plays. The browser preview has none. */
+export async function refreshPlayback(): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>('plugin:ora|refresh_playback');
+}
+
+/** The account's Spotify devices. Keys are opaque; device IDs stay in Rust. */
+export async function listDevices(): Promise<Device[]> {
+  requireDesktop();
+  return invoke<Device[]>('plugin:ora|list_devices');
+}
+
+/** Moves playback to the device behind a key from `listDevices`. */
+export async function transferPlayback(key: string): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|transfer_playback', { key });
 }
 
 export type WindowChrome = 'custom' | 'macos' | 'preview';

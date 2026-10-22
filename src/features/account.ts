@@ -27,6 +27,8 @@ export function describeError(
           return 'Spotify refused access. Check that your Spotify account is listed under User Management for your app in the Spotify Developer Dashboard.';
         case 'Premium':
           return 'Spotify refused: controlling playback needs Spotify Premium.';
+        case 'Restricted':
+          return 'Spotify doesn’t allow controlling this device from other apps.';
         default:
           return 'Spotify refused this request.';
       }
@@ -73,7 +75,9 @@ export function describeError(
     case 'notFound':
       return 'Spotify couldn’t find that.';
     case 'noActiveDevice':
-      return 'No Spotify device is active.';
+      return 'No Spotify device is active. Choose one under Playback device in the player.';
+    case 'deviceUnavailable':
+      return 'That device is no longer available. Choose another one.';
     case 'unsupported':
       return 'That isn’t available here.';
     default: {
