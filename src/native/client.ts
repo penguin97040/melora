@@ -1,4 +1,10 @@
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import type { OraError } from './bindings/OraError';
+import type { Profile } from './bindings/Profile';
+import type { Status } from './bindings/Status';
+
+export type { OraError, Profile };
+export type SpotifyStatus = Status;
 
 export type Preferences = {
   scale: number;
@@ -43,6 +49,60 @@ export function hasNativeStorage(): boolean {
 export async function showMainWindow(): Promise<void> {
   if (!isTauri()) return;
   return invoke<void>('show_main_window');
+}
+
+// Spotify account commands from the shared `ora` plugin. Tokens never reach JavaScript; these
+// calls only move status, the Client ID and validated open.spotify.com links.
+const previewSpotifyStatus: SpotifyStatus = {
+  auth: { kind: 'notConfigured' },
+  clientIdFromEnvironment: false,
+  clientIdHint: null,
+  lastError: null,
+};
+
+function requireDesktop(): void {
+  if (!isTauri()) throw new Error('Spotify sign-in needs the desktop app.');
+}
+
+/** Calls `onStatus` with the current status and then every change. */
+export async function subscribeSpotify(
+  onStatus: (status: SpotifyStatus) => void,
+): Promise<void> {
+  if (!isTauri()) {
+    onStatus(previewSpotifyStatus);
+    return;
+  }
+  const channel = new Channel<SpotifyStatus>();
+  channel.onmessage = onStatus;
+  await invoke<void>('plugin:ora|subscribe', { onStatus: channel });
+}
+
+export async function setSpotifyClientId(
+  clientId: string,
+): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|set_client_id', { clientId });
+}
+
+export async function signInWithSpotify(): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|sign_in');
+}
+
+export async function cancelSpotifySignIn(): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|cancel_sign_in');
+}
+
+export async function signOutOfSpotify(): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|sign_out');
+}
+
+/** Opens an open.spotify.com page in the system browser (validated again in Rust). */
+export async function openInSpotify(url: string): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|open_in_spotify', { url });
 }
 
 export type WindowChrome = 'custom' | 'macos' | 'preview';

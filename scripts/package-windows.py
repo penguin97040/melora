@@ -13,14 +13,17 @@ NOTICE = '''Melora portable preview
 Extract the complete folder to a writable location and run Melora.exe.
 Windows x64 and the system Microsoft Edge WebView2 Runtime are required.
 No installer or Chromium runtime is included. This build is unsigned.
-Preferences are stored in data/preferences.json beside Melora.exe.
-Change display settings, close, relaunch and confirm they are restored.
+Preferences are stored in data/preferences.json beside Melora.exe, and your
+Spotify Client ID in data/spotify.json. Neither file holds a password or token.
 If data cannot be written, move the extracted folder to a writable location.
-Synthetic preview only: no Spotify authentication or audio is implemented.
-Future Spotify credentials will use Windows Credential Manager; moving this
-folder to another computer will require signing in again.
+Spotify sign-in keeps its refresh token only in Windows Credential Manager;
+moving this folder to another computer requires signing in again. There is
+no audio yet: the library and player still show labelled synthetic content.
+Melora is unofficial and not affiliated with Spotify.
 This is a compilation-tested build; Windows launch still needs manual testing.
 '''
+# Files the owner's copy writes at runtime. They must never be packaged.
+NEVER_SHIP = {'spotify.json', 'preferences.json'}
 
 
 def notice_files():
@@ -73,6 +76,8 @@ def package(exe, version):
             raise ValueError('Runtime input must be a regular file')
         contents[name] = file.read_bytes()
     contents.update({'data/': b'', 'README.txt': NOTICE.encode()})
+    if any(Path(name).name.lower() in NEVER_SHIP or (name.startswith('data/') and name != 'data/') for name in contents):
+        raise ValueError('Account or settings data must not be packaged')
     output = Path('artifacts') / f'Melora-{version}-windows-x64.zip'
     with tempfile.TemporaryDirectory(prefix='melora-package-', dir=output.parent) as directory:
         temporary = Path(directory) / 'release.zip'

@@ -1,16 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
 import { Player } from './components/Player';
+import { SpotifyAccount } from './components/SpotifyAccount';
 import { WindowHeader } from './components/WindowHeader';
+import { accountName } from './features/account';
 import {
   defaultPreferences,
   getAppInfo,
   getWindowChrome,
   hasNativeStorage,
+  openInSpotify,
   savePreferences,
   showMainWindow,
+  subscribeSpotify,
 } from './native/client';
-import type { AppInfo, Preferences, WindowChrome } from './native/client';
+import type {
+  AppInfo,
+  Preferences,
+  SpotifyStatus,
+  WindowChrome,
+} from './native/client';
 import { previewPlaylists, previewTracks } from './preview';
+
+function connectionLabel(status: SpotifyStatus | null): string {
+  switch (status?.auth.kind) {
+    case 'signedIn':
+      return 'Signed in to Spotify';
+    case 'signingIn':
+      return 'Signing in to Spotify…';
+    case 'sessionExpired':
+      return 'Spotify sign-in expired';
+    default:
+      return 'Spotify not connected';
+  }
+}
 
 type View = 'Library' | 'Search' | 'Settings';
 const initialTrack = previewTracks[0]!;
@@ -28,6 +50,8 @@ export default function App() {
   const [windowMessage, setWindowMessage] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [preferencesSettled, setPreferencesSettled] = useState(false);
+  const [spotify, setSpotify] = useState<SpotifyStatus | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const revealRequested = useRef(false);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const searchRef = useRef<HTMLInputElement>(null);
@@ -71,6 +95,23 @@ export default function App() {
       .finally(() => {
         if (active) setChromeSettled(true);
       });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    // Status arrives over a channel; it never contains tokens. The subscription lives as long
+    // as the page, so the native side stops sending when the page goes away.
+    let active = true;
+    void subscribeSpotify((status) => {
+      if (active) setSpotify(status);
+    }).catch(() => {
+      if (active)
+        setWindowMessage(
+          'The Spotify connection status could not be loaded. Relaunch Melora to try again.',
+        );
+    });
     return () => {
       active = false;
     };
@@ -125,6 +166,8 @@ export default function App() {
       : !activePlaylist.artist || track.artist === activePlaylist.artist,
   );
   const artistCount = new Set(tracks.map((track) => track.artist)).size;
+  const profile =
+    spotify?.auth.kind === 'signedIn' ? spotify.auth.profile : null;
 
   return (
     <div
@@ -153,8 +196,19 @@ export default function App() {
               </button>
             ))}
             <p className="connection-note">
-              <span className="status-dot" />
-              Spotify not connected
+              <span
+                className={`status-dot ${spotify?.auth.kind === 'signedIn' ? 'connected' : ''}`}
+              />
+              {spotify?.auth.kind === 'notConfigured' ? (
+                <button
+                  className="link-button"
+                  onClick={() => setView('Settings')}
+                >
+                  Set up Spotify
+                </button>
+              ) : (
+                connectionLabel(spotify)
+              )}
             </p>
           </nav>
           <section className="playlists" aria-label="Preview playlists">
@@ -266,6 +320,7 @@ export default function App() {
                   ? 'Preferences are saved on this device. Windows portable builds keep them in the data folder beside Melora.exe.'
                   : 'Browser preview: preferences last for this session. The desktop app saves them on this device.'}
               </p>
+              <SpotifyAccount status={spotify} />
             </section>
           ) : (
             <>
@@ -368,6 +423,39 @@ export default function App() {
           <span className="status-dot" />
           Synthetic preview
         </span>
+        {profile && (
+          <span className="account-chip">
+            {profile.imageUrl && !avatarFailed && (
+              <img
+                className="avatar"
+                src={profile.imageUrl}
+                alt=""
+                width={16}
+                height={16}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={() => setAvatarFailed(true)}
+              />
+            )}
+            <span>Spotify: {accountName(spotify)}</span>
+            {profile.spotifyUrl && (
+              <button
+                className="link-button"
+                onClick={() => {
+                  const url = profile.spotifyUrl;
+                  if (url)
+                    void openInSpotify(url).catch(() =>
+                      setWindowMessage(
+                        'Your browser could not be opened. Try again.',
+                      ),
+                    );
+                }}
+              >
+                Open in Spotify
+              </button>
+            )}
+          </span>
+        )}
         <span className="playback-device">
           Playback device: <span>No device connected</span>
         </span>

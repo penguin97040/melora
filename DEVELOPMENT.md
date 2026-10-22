@@ -19,7 +19,7 @@ Consult [Tauri's current prerequisites](https://v2.tauri.app/start/prerequisites
 - Fedora: corresponding WebKitGTK 4.1, C/C++, librsvg and AppIndicator development packages from Tauri's current prerequisite guide.
 - macOS: Rust and Xcode Command Line Tools. Build and test on a supported macOS version.
 
-No Spotify configuration is required for the preview shell.
+No Spotify configuration is required for the preview shell. To test sign-in, enter a Client ID in Settings, or set `MELORA_SPOTIFY_CLIENT_ID` for a development run (it overrides the saved value and can't be edited in the app). Never commit a real Client ID.
 
 ## Checks
 
@@ -69,7 +69,7 @@ If Microsoft's SDK download is blocked, report the exact required hostname and w
 - Startup: the native window starts hidden. After local preference loading settles and the shell commits, `show_main_window` finishes sizing/centring and reveals it once. Failed preference loading still reveals the shell with an error. Confirm repeated launches reveal a centred shell without a visible move, and that resizing remains unchanged after duplicate readiness calls.
 - Layout: opening size prefers 1440 × 940 logical pixels, bounded by the current monitor's work area after native decorations. Artwork shrinks with the remaining player height to a 6rem minimum before the pane scrolls; text and controls retain their sizes. Stacked narrow layouts keep width-based square artwork. At 100% interface scale the full player fits at the preferred size. Test shorter windows, 125–200% scale, wrapping titles and reduced motion; scroll to all details and verify complete control focus outlines stay visible.
 
-This milestone contains no Spotify authentication or audio. Embedded playback is supported only after audible playback has been independently verified on each OS. Linux AppImage and macOS application bundle delivery follow in later milestones.
+Spotify sign-in (Authorization Code with PKCE, a one-shot `127.0.0.1` callback listener and the OS credential store) is implemented in `ora/crates/ora-core`; its tests mock HTTP and the store and make no network calls. Real sign-in, persistence across relaunch and sign-out need a Windows, macOS or Linux desktop with a credential store and a browser. There is no audio yet. Embedded playback is supported only after audible playback has been independently verified on each OS. Linux AppImage and macOS application bundle delivery follow in later milestones.
 
 The header shares the window title area. Windows/Linux use a resizable undecorated
 window; macOS overlays the decorated title bar with native traffic lights and a

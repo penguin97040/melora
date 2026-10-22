@@ -2,7 +2,7 @@
 
 Melora is a personal desktop music client built with Tauri 2, Rust, React and TypeScript. Windows, Linux and macOS are intended targets.
 
-The first build is a local design preview with invented track titles, artists and artwork. You can browse preview playlists, search, select tracks and adjust display preferences. Shuffle and repeat let you preview mode selections; they leave track order unchanged and reset on relaunch. Spotify sign-in and playback are not implemented yet. Melora is unofficial and is not affiliated with Spotify.
+The first build is a local design preview with invented track titles, artists and artwork. You can browse preview playlists, search, select tracks and adjust display preferences. Shuffle and repeat let you preview mode selections; they leave track order unchanged and reset on relaunch. You can sign in to Spotify and see your account name; your library, playlists and playback are not implemented yet, so the content stays synthetic and labelled. Melora is unofficial and is not affiliated with, endorsed by or sponsored by Spotify.
 
 ## Run the preview
 
@@ -21,13 +21,19 @@ For native development and portable builds, see [DEVELOPMENT.md](DEVELOPMENT.md)
 
 The build command produces `artifacts/Melora-0.1.0-windows-x64.zip`. Extract the complete ZIP to a writable folder and launch `Melora.exe`. No installer is required. The system Microsoft Edge WebView2 Runtime is required and is not bundled. Preview builds are unsigned.
 
-Preferences are saved in `data/preferences.json` beside the executable. An unwritable folder produces a visible error. Future Spotify credentials will be stored in Windows Credential Manager; moving the portable folder to another computer will require signing in again.
+Preferences are saved in `data/preferences.json` beside the executable, and your Spotify Client ID in `data/spotify.json`. An unwritable folder produces a visible error. The Spotify refresh token is stored only in Windows Credential Manager (macOS Keychain or Linux Secret Service elsewhere); moving the portable folder to another computer requires signing in again.
 
 Compilation and runtime verification are separate. Windows and macOS launch still require testing on those systems.
 
 ## Spotify configuration
 
-Future authentication will use a bring-your-own Spotify Client ID and Authorization Code with PKCE. The public `.env.example` contains only a placeholder. Do not use a Spotify Client Secret. The intended mode is personal, non-commercial Spotify Development Mode, subject to current Spotify account and API requirements.
+Melora uses your own Spotify app (bring your own Client ID) and Authorization Code with PKCE. It never uses or asks for a Client Secret or your Spotify password.
+
+1. In the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard), create an app. Add the Redirect URI `http://127.0.0.1/callback` exactly (no port; Melora picks a free local port at sign-in, which Spotify allows for loopback addresses). Tick **Web API** and **Web Playback SDK**.
+2. Under **User Management**, add every Spotify account that will sign in, including your own. Spotify answers other accounts with "forbidden" errors.
+3. In Melora, open **Settings → Spotify account**, paste the app's Client ID, save, and choose **Sign in with Spotify**. Your browser opens Spotify's approval page.
+
+Melora requests only the scopes the current features need (now `user-read-private`, for your profile). Access tokens stay in the native process memory; nothing is sent anywhere except Spotify. The intended mode is personal, non-commercial Spotify Development Mode, which needs the app owner to have Spotify Premium, allows up to five users and expires sign-ins after six months.
 
 ## Licences
 

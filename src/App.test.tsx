@@ -18,6 +18,19 @@ vi.mock('./native/client', () => ({
   savePreferences: vi.fn(),
   showMainWindow: vi.fn(),
   hasNativeStorage: () => true,
+  subscribeSpotify: vi.fn(async (onStatus: (status: unknown) => void) =>
+    onStatus({
+      auth: { kind: 'notConfigured' },
+      clientIdFromEnvironment: false,
+      clientIdHint: null,
+      lastError: null,
+    }),
+  ),
+  openInSpotify: vi.fn(),
+  setSpotifyClientId: vi.fn(),
+  signInWithSpotify: vi.fn(),
+  cancelSpotifySignIn: vi.fn(),
+  signOutOfSpotify: vi.fn(),
 }));
 
 beforeEach(() => {

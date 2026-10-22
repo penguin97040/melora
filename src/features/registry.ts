@@ -13,9 +13,10 @@ const phase = (label: string, n: number): FeatureUi => ({
 });
 
 export const featureUi = {
-  SignIn: phase('Sign in with Spotify', 2),
-  Profile: phase('Profile', 2),
-  OpenInSpotify: phase('Open in Spotify', 2),
+  // Settings → Spotify account, the sidebar status and the footer account link.
+  SignIn: { kind: 'wired', label: 'Sign in with Spotify' },
+  Profile: { kind: 'wired', label: 'Profile' },
+  OpenInSpotify: { kind: 'wired', label: 'Open in Spotify' },
   EmbeddedPlayback: phase('Playback in Melora', 3),
   MediaKeys: phase('Media keys', 3),
   ConnectControl: phase('Control another device', 4),

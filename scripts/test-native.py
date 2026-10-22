@@ -437,7 +437,46 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert execute("return document.querySelector('.transport button').getAttribute('aria-label') === 'Shuffle: Off (preview)' && document.querySelector('.transport button:last-child').getAttribute('aria-label') === 'Repeat: Off (preview)';"), 'Preview modes persisted after relaunch'
         shot = call('GET', '/screenshot')
         (output / 'melora-linux-restored.png').write_bytes(base64.b64decode(shot))
+        # Spotify account: the real ora plugin over IPC, with a synthetic Client ID only.
+        # Sign-in itself needs a browser and Spotify, so it is never started here.
+        assert execute("return !!document.querySelector('.connection-note .link-button');"), 'Set up Spotify action missing'
+        execute("document.querySelectorAll('.nav-item')[2].click();")
+        wait_script("return !!document.querySelector('#spotify-client-id');")
+        execute("document.querySelector('.account-settings').scrollIntoView({block: 'start'});")
+        (output / 'melora-linux-settings-spotify-setup.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+        execute("""
+            window.__oraReview = null;
+            const invoke = window.__TAURI_INTERNALS__.invoke;
+            const rejected = (operation) => operation.then(() => null, (error) => error);
+            Promise.all([
+                invoke('plugin:ora|status'),
+                rejected(invoke('plugin:ora|set_client_id', {clientId: 'not a client id'})),
+                rejected(invoke('plugin:ora|open_in_spotify', {url: 'https://example.invalid/'})),
+                rejected(invoke('plugin:ora|open_in_spotify', {url: 'file:///etc/passwd'})),
+            ]).then(results => { window.__oraReview = results; });
+        """)
+        wait_script('return Array.isArray(window.__oraReview);')
+        ora_review = execute('return window.__oraReview;')
+        assert ora_review[0]['auth'] == {'kind': 'notConfigured'}, f'Unexpected initial account status: {ora_review[0]}'
+        assert ora_review[1] == {'kind': 'invalidClientId'}, 'Invalid Client ID accepted'
+        assert ora_review[2] == {'kind': 'unsupported'} and ora_review[3] == {'kind': 'unsupported'}, 'Non-Spotify URL accepted'
+        synthetic_id = '0123456789abcdef' * 2
+        execute("""
+            const field = document.querySelector('#spotify-client-id');
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, arguments[0]);
+            field.dispatchEvent(new Event('input', {bubbles: true}));
+        """, synthetic_id)
+        wait_script("return !document.querySelector('.client-id-form button').disabled;")
+        execute("document.querySelector('.client-id-form button').click();")
+        wait_script("return [...document.querySelectorAll('.account-actions button')].some(b => b.textContent === 'Sign in with Spotify');")
+        spotify_path = Path(data) / 'app.melora.desktop/spotify.json'
+        assert json.loads(spotify_path.read_text()) == {'clientId': synthetic_id}, 'Client ID not saved beside preferences'
+        assert execute("return document.querySelector('.connection-note').textContent.includes('Spotify not connected');"), 'Sidebar status not updated'
+        assert execute("return document.querySelector('#spotify-client-id').placeholder === 'Saved: 0123…cdef' && !document.body.innerText.includes(arguments[0]);", synthetic_id), 'Full Client ID shown in the UI'
+        execute("document.querySelector('.account-settings').scrollIntoView({block: 'start'});")
+        (output / 'melora-linux-settings-spotify.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         (output / 'native-acceptance.json').write_text(json.dumps({
+            'spotify_account': 'plugin status, invalid Client ID and URL rejection, masked save and Settings screenshots passed; sign-in not run',
             'platform': 'linux', 'ipc': 'passed', 'keyboard_selection': 'passed',
             'local_fonts': 'passed', 'scaling': '100–200%, 720, 1360 and 1440px',
             'status_strip': 'visible', 'preferences_relaunch': 'passed',

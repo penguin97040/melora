@@ -69,6 +69,19 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             packaging.package(self.exe, '0.1.0')
 
+    def test_account_and_settings_files_are_never_packaged(self):
+        release = Path('artifacts/Melora-0.1.0-windows-x64.zip')
+        release.write_bytes(b'previous synthetic release')
+        for name in ('spotify.json', 'Preferences.json'):
+            planted = self.root / name
+            planted.write_text('{"synthetic": true}')
+            manifest = dict(self.manifest, **{name: hashlib.sha256(planted.read_bytes()).hexdigest()})
+            Path('artifacts/dependency-notices-manifest.json').write_text(json.dumps(manifest))
+            with self.assertRaises(ValueError):
+                packaging.package(self.exe, '0.1.0')
+            planted.unlink()
+        self.assertEqual(release.read_bytes(), b'previous synthetic release')
+
     def test_inventory_path_traversal_is_rejected(self):
         self.manifest['../outside.txt'] = '0' * 64
         Path('artifacts/dependency-notices-manifest.json').write_text(json.dumps(self.manifest))
