@@ -1593,15 +1593,18 @@ const SEARCH: &str = r#"{
    null,
    {"id":"PlAyLiSt0123456789abcd","name":"Mix","owner":{"id":"o","display_name":"Someone"},
     "items":{"total":30}}]},
+  "shows":{"href":"x","limit":10,"offset":0,"previous":null,"next":null,"total":1,"items":[
+   {"type":"show","uri":"spotify:show:ShOw0123456789xyzXYZ01","name":"Talk","publisher":"Kiri Media",
+    "total_episodes":120}]},
   "episodes":{"href":"x","limit":10,"offset":0,"previous":null,"next":null,"total":1,"items":[
    {"type":"episode","uri":"spotify:episode:EpIs0123456789xyzXYZ01","name":"Ep",
     "duration_ms":3600000,"release_date":"2026-10-01","is_playable":false}]}
 }"#;
 
 /// A result with only the fields every kind has.
-fn result(position: u32, uri: &str, name: &str) -> ora_types::SearchItem {
+fn result(position: u32, uri: &str, name: &str) -> ora_types::CatalogItem {
     let (kind, id) = uri["spotify:".len()..].split_once(':').unwrap();
-    ora_types::SearchItem {
+    ora_types::CatalogItem {
         position,
         uri: uri.into(),
         name: name.into(),
@@ -1617,7 +1620,7 @@ fn result(position: u32, uri: &str, name: &str) -> ora_types::SearchItem {
 
 #[tokio::test]
 async fn search_lists_each_kind_and_caches_by_query() {
-    use ora_types::{SearchItem, SearchKind};
+    use ora_types::{CatalogItem, SearchKind};
     let h = playback_ready("search").await;
     let before = h.http.requests().len();
     h.http.push(200, SEARCH);
@@ -1625,7 +1628,7 @@ async fn search_lists_each_kind_and_caches_by_query() {
     assert_eq!(
         h.http.requests()[before].url,
         "https://api.spotify.com/v1/search?q=Kiri+%26+Te\
-         &type=track,artist,album,playlist,episode&limit=10"
+         &type=track,artist,album,playlist,show,episode&limit=10"
     );
 
     // Rows keep their place among all results; nulls and links of the wrong kind are skipped.
@@ -1635,7 +1638,7 @@ async fn search_lists_each_kind_and_caches_by_query() {
     );
     assert_eq!(
         found.tracks.items,
-        [SearchItem {
+        [CatalogItem {
             by: vec!["A".into(), "B".into()],
             album: "Album".into(),
             duration_ms: Some(200_000),
@@ -1649,14 +1652,14 @@ async fn search_lists_each_kind_and_caches_by_query() {
     assert_eq!(
         found.albums.items,
         [
-            SearchItem {
+            CatalogItem {
                 by: vec!["Kiri".into()],
                 release_date: "2021-03".into(),
                 total: Some(12),
                 ..result(0, "spotify:album:AlBu0123456789xyzXYZ01", "Record")
             },
             // A date in another shape is dropped.
-            SearchItem {
+            CatalogItem {
                 total: Some(1),
                 ..result(1, "spotify:album:AlBu0123456789xyzXYZ02", "Odd date")
             },
@@ -1665,7 +1668,7 @@ async fn search_lists_each_kind_and_caches_by_query() {
     // A playlist without a URI is found by its ID.
     assert_eq!(
         found.playlists.items,
-        [SearchItem {
+        [CatalogItem {
             by: vec!["Someone".into()],
             total: Some(30),
             ..result(1, "spotify:playlist:PlAyLiSt0123456789abcd", "Mix")
@@ -1673,11 +1676,19 @@ async fn search_lists_each_kind_and_caches_by_query() {
     );
     assert_eq!(
         found.episodes.items,
-        [SearchItem {
+        [CatalogItem {
             release_date: "2026-10-01".into(),
             duration_ms: Some(3_600_000),
             playable: false,
             ..result(0, "spotify:episode:EpIs0123456789xyzXYZ01", "Ep")
+        }]
+    );
+    assert_eq!(
+        found.shows.items,
+        [CatalogItem {
+            by: vec!["Kiri Media".into()],
+            total: Some(120),
+            ..result(0, "spotify:show:ShOw0123456789xyzXYZ01", "Talk")
         }]
     );
 
@@ -1765,4 +1776,302 @@ async fn search_needs_a_sign_in() {
         Err(OraError::SignedOut)
     );
     assert!(h.http.requests().is_empty());
+}
+
+/// Signed in with playback and every library permission, and Melora's device ready.
+async fn whole_library_ready(label: &str) -> Harness {
+    let h = playback_ready(label).await;
+    let scopes = format!(
+        "{PLAYBACK_SCOPES} {LIBRARY_SCOPES} user-library-modify user-read-playback-position"
+    );
+    h.http
+        .push(200, &tokens_with_scope("acc2", Some("ref2"), &scopes));
+    h.http.push(200, ME);
+    h.ora
+        .sign_in(Some(Feature::SavedShowsEpisodes))
+        .await
+        .unwrap();
+    h
+}
+
+#[tokio::test]
+async fn saved_albums_shows_and_episodes_are_listed() {
+    let h = whole_library_ready("saved-lists").await;
+    let before = h.http.requests().len();
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":2,"items":[
+        {"added_at":"2026-10-01T00:00:00Z","album":{"type":"album",
+         "uri":"spotify:album:AlBu0123456789xyzXYZ01","name":"Record","release_date":"2021",
+         "total_tracks":9,"artists":[{"name":"Kiri"}],"tracks":{"total":9,"items":[]}}},
+        null]}"#,
+    );
+    let albums = h.ora.saved_albums(0).await.unwrap();
+    assert_eq!(
+        albums.items,
+        [ora_types::CatalogItem {
+            by: vec!["Kiri".into()],
+            release_date: "2021".into(),
+            total: Some(9),
+            ..result(0, "spotify:album:AlBu0123456789xyzXYZ01", "Record")
+        }]
+    );
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":1,"items":[
+        {"added_at":"2026-10-01T00:00:00Z","show":{"type":"show",
+         "uri":"spotify:show:ShOw0123456789xyzXYZ01","name":"Talk","publisher":"Kiri Media",
+         "total_episodes":120}}]}"#,
+    );
+    let shows = h.ora.saved_shows(0).await.unwrap();
+    assert_eq!(shows.items[0].by, ["Kiri Media"]);
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":1,"items":[
+        {"added_at":"2026-10-01T00:00:00Z","episode":{"type":"episode",
+         "uri":"spotify:episode:EpIs0123456789xyzXYZ01","name":"Ep","duration_ms":3600000,
+         "release_date":"2026-10-02","show":{"name":"Talk","images":[]}}}]}"#,
+    );
+    let episodes = h.ora.saved_episodes(0).await.unwrap();
+    let episode = &episodes.items[0];
+    assert_eq!(
+        (
+            episode.uri.as_deref(),
+            episode.album.as_str(),
+            episode.release_date.as_str()
+        ),
+        (
+            Some("spotify:episode:EpIs0123456789xyzXYZ01"),
+            "Talk",
+            "2026-10-02"
+        )
+    );
+
+    // Each is cached for a minute.
+    h.ora.saved_albums(0).await.unwrap();
+    h.ora.saved_shows(0).await.unwrap();
+    h.ora.saved_episodes(0).await.unwrap();
+    let urls: Vec<String> = h.http.requests()[before..]
+        .iter()
+        .map(|r| r.url.clone())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://api.spotify.com/v1/me/albums?limit=50&offset=0",
+            "https://api.spotify.com/v1/me/shows?limit=50&offset=0",
+            "https://api.spotify.com/v1/me/episodes?limit=50&offset=0",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn albums_and_shows_list_their_tracks_and_episodes() {
+    let h = whole_library_ready("album-show").await;
+    let before = h.http.requests().len();
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":50,"previous":null,"next":null,"total":52,"items":[
+        {"type":"track","uri":"spotify:track:AbCd0123456789xyzXYZ01","name":"Song",
+         "duration_ms":200000,"artists":[{"name":"A"}],"is_local":false},
+        null,
+        {"type":"track","uri":"spotify:track:AbCd0123456789xyzXYZ02","name":"Other",
+         "duration_ms":100000,"artists":[]}]}"#,
+    );
+    let tracks = h
+        .ora
+        .album_tracks("AlBu0123456789xyzXYZ01", 50)
+        .await
+        .unwrap();
+    // Rows keep their place in the album, so playing one starts at the right track.
+    let rows: Vec<(u32, &str, &str)> = tracks
+        .items
+        .iter()
+        .map(|row| (row.position, row.name.as_str(), row.album.as_str()))
+        .collect();
+    assert_eq!(rows, [(50, "Song", ""), (52, "Other", "")]);
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,
+        "next":"https://api.spotify.com/v1/shows/x/episodes?offset=50","total":300,"items":[
+        {"type":"episode","uri":"spotify:episode:EpIs0123456789xyzXYZ01","name":"Ep",
+         "duration_ms":3600000,"release_date":"2026-10-02","images":[]}]}"#,
+    );
+    let episodes = h
+        .ora
+        .show_episodes("ShOw0123456789xyzXYZ01", 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            episodes.items[0].release_date.as_str(),
+            episodes.next_offset
+        ),
+        ("2026-10-02", Some(1))
+    );
+    let urls: Vec<String> = h.http.requests()[before..]
+        .iter()
+        .map(|r| r.url.clone())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://api.spotify.com/v1/albums/AlBu0123456789xyzXYZ01/tracks?limit=50&offset=50",
+            "https://api.spotify.com/v1/shows/ShOw0123456789xyzXYZ01/episodes?limit=50&offset=0",
+        ]
+    );
+    let count = h.http.requests().len();
+    assert_eq!(
+        h.ora.album_tracks("../me", 0).await,
+        Err(OraError::Unsupported)
+    );
+    assert_eq!(
+        h.ora.show_episodes("short", 0).await,
+        Err(OraError::Unsupported)
+    );
+    assert_eq!(h.http.requests().len(), count);
+}
+
+fn track_uri(n: usize) -> String {
+    format!("spotify:track:{n:0>22}")
+}
+
+#[tokio::test]
+async fn saved_states_are_asked_40_at_a_time_and_remembered() {
+    let h = whole_library_ready("saved-states").await;
+    let before = h.http.requests().len();
+    let uris: Vec<String> = (0..45).map(track_uri).collect();
+    let answers = |count: usize, saved: fn(usize) -> bool| {
+        serde_json::to_string(&(0..count).map(saved).collect::<Vec<bool>>()).unwrap()
+    };
+    h.http.push(200, &answers(40, |i| i % 2 == 0));
+    h.http.push(200, &answers(5, |_| true));
+    let saved = h.ora.saved_states(&uris).await.unwrap();
+    assert_eq!(
+        saved,
+        (0..45).map(|i| i >= 40 || i % 2 == 0).collect::<Vec<_>>()
+    );
+    let seen = h.http.requests();
+    assert_eq!(seen.len() - before, 2);
+    let first = &seen[before].url;
+    assert!(first.starts_with("https://api.spotify.com/v1/me/library/contains?uris="));
+    assert_eq!(first.matches("%2C").count(), 39);
+
+    // Known answers aren't asked again; only the new item is.
+    h.http.push(200, "[false]");
+    let mut more = uris[..3].to_vec();
+    more.push(track_uri(99));
+    assert_eq!(
+        h.ora.saved_states(&more).await.unwrap(),
+        [true, false, true, false]
+    );
+    assert_eq!(h.http.requests().len() - before, 3);
+    assert_eq!(
+        h.http.requests().last().unwrap().url,
+        format!(
+            "https://api.spotify.com/v1/me/library/contains?uris={}",
+            track_uri(99).replace(':', "%3A")
+        )
+    );
+
+    // Only library kinds, and not too many at once.
+    let count = h.http.requests().len();
+    assert_eq!(
+        h.ora
+            .saved_states(&["spotify:artist:ArTi0123456789xyzXYZ01".into()])
+            .await,
+        Err(OraError::InvalidSpotifyLink)
+    );
+    assert_eq!(
+        h.ora
+            .saved_states(&(0..501).map(track_uri).collect::<Vec<_>>())
+            .await,
+        Err(OraError::Unsupported)
+    );
+    assert_eq!(h.ora.saved_states(&[]).await, Err(OraError::Unsupported));
+    assert_eq!(h.http.requests().len(), count);
+}
+
+#[tokio::test]
+async fn saving_goes_40_at_a_time_and_keeps_everything_in_step() {
+    let h = whole_library_ready("set-saved").await;
+    // The player shows the first track; Liked Songs and saved albums are cached.
+    h.http.push(200, REMOTE_STATE);
+    h.ora.refresh_playback().await.unwrap();
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":0,"items":[]}"#,
+    );
+    h.ora.liked_tracks(0).await.unwrap();
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":0,"items":[]}"#,
+    );
+    h.ora.saved_albums(0).await.unwrap();
+
+    let before = h.http.requests().len();
+    let mut uris: Vec<String> = (0..41).map(track_uri).collect();
+    uris[0] = "spotify:track:AbCd0123456789xyzXYZ01".into();
+    uris.push(uris[1].clone());
+    h.http.push(200, "");
+    h.http.push(200, "");
+    h.ora.set_saved(&uris, true).await.unwrap();
+    let sent: Vec<(Method, usize)> = h.http.requests()[before..]
+        .iter()
+        .map(|r| (r.method, r.url.matches("%2C").count() + 1))
+        .collect();
+    // The duplicate goes; 41 items are two requests.
+    assert_eq!(sent, [(Method::Put, 40), (Method::Put, 1)]);
+    assert_eq!(
+        h.ora.playback().status().now_playing.unwrap().liked,
+        Some(true)
+    );
+    // The new states are known without asking, and Liked Songs is read again.
+    assert_eq!(h.ora.saved_states(&uris[..2]).await.unwrap(), [true, true]);
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":0,"items":[]}"#,
+    );
+    h.ora.liked_tracks(0).await.unwrap();
+    // Saved albums weren't affected, so they still come from memory.
+    h.ora.saved_albums(0).await.unwrap();
+    assert_eq!(h.http.requests().len() - before, 3);
+
+    // Removing an album forgets the saved albums.
+    h.http.push(200, "");
+    h.ora
+        .set_saved(&["spotify:album:AlBu0123456789xyzXYZ01".into()], false)
+        .await
+        .unwrap();
+    assert_eq!(h.http.requests().last().unwrap().method, Method::Delete);
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":0,"items":[]}"#,
+    );
+    h.ora.saved_albums(0).await.unwrap();
+    assert_eq!(h.http.requests().len() - before, 5);
+}
+
+#[tokio::test]
+async fn library_views_need_their_permission() {
+    let h = library_ready("library-views-scope").await;
+    let before = h.http.requests().len();
+    let needs = |feature| Some(OraError::NeedsScope { feature });
+    assert_eq!(
+        h.ora.saved_shows(0).await.err(),
+        needs(Feature::SavedShowsEpisodes)
+    );
+    assert_eq!(
+        h.ora.saved_episodes(0).await.err(),
+        needs(Feature::SavedShowsEpisodes)
+    );
+    assert_eq!(
+        h.ora.show_episodes("ShOw0123456789xyzXYZ01", 0).await.err(),
+        needs(Feature::SavedShowsEpisodes)
+    );
+    assert_eq!(
+        h.ora.set_saved(&[track_uri(1)], true).await.err(),
+        needs(Feature::LibrarySaveRemove)
+    );
+    assert_eq!(h.http.requests().len(), before);
 }

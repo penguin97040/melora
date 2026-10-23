@@ -38,11 +38,12 @@ export const featureUi = {
   AddToQueue: phase('Add to queue', 6),
   // Search, for songs, artists, albums, playlists and episodes (Phase 6b).
   Search: { kind: 'wired', label: 'Search' },
-  // The sidebar's Liked Songs and playlists, and their tracks in the centre (Phase 6a).
+  // The sidebar's Liked Songs, Albums, Podcasts, Your Episodes and playlists, and their tracks
+  // in the centre (Phases 6a and 6c).
   SavedTracks: { kind: 'wired', label: 'Liked Songs' },
-  SavedAlbums: phase('Saved albums', 6),
-  SavedShowsEpisodes: phase('Saved shows and episodes', 6),
-  // The player's + (Liked Songs) for the track playing now; library views arrive in Phase 6.
+  SavedAlbums: { kind: 'wired', label: 'Saved albums' },
+  SavedShowsEpisodes: { kind: 'wired', label: 'Podcasts and saved episodes' },
+  // The player's +, each song row's + and the album and podcast pages' save control.
   LibrarySaveRemove: { kind: 'wired', label: 'Save to library' },
   Playlists: { kind: 'wired', label: 'Your playlists' },
   PlaylistDetail: { kind: 'wired', label: 'Playlist tracks' },

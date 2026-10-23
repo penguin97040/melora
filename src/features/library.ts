@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { likedTracks, listPlaylists, playlistTracks } from '../native/client';
+import type { RefObject } from 'react';
+import {
+  albumTracks,
+  likedTracks,
+  listPlaylists,
+  playlistTracks,
+  savedAlbums,
+  savedEpisodes,
+  savedShows,
+  savedStates,
+  showEpisodes,
+} from '../native/client';
 import type {
+  CatalogItem,
   PlayRequest,
   PlaylistSummary,
   SpotifyStatus,
@@ -8,9 +20,28 @@ import type {
 } from '../native/client';
 import type { Feature } from '../native/bindings/Feature';
 
-/** What the sidebar can show in the centre besides the preview playlists. */
+/** What the sidebar (or a search result) can show in the centre besides the preview playlists. */
 export type ListSource =
-  { kind: 'liked' } | { kind: 'playlist'; playlist: PlaylistSummary };
+  | { kind: 'liked' }
+  | { kind: 'playlist'; playlist: PlaylistSummary }
+  | { kind: 'episodes' }
+  | { kind: 'album'; album: CatalogItem }
+  | { kind: 'show'; show: CatalogItem }
+  /** Saved albums or saved shows: a list of albums or shows to open. */
+  | { kind: 'albums' }
+  | { kind: 'shows' };
+
+/** Sources whose rows are albums or shows rather than tracks and episodes. */
+export type CatalogSource = Extract<ListSource, { kind: 'albums' | 'shows' }>;
+
+export function isCatalog(source: ListSource): source is CatalogSource {
+  return source.kind === 'albums' || source.kind === 'shows';
+}
+
+/** Lists of episodes, which play one at a time. */
+export function isEpisodeList(source: ListSource): boolean {
+  return source.kind === 'episodes' || source.kind === 'show';
+}
 
 export function granted(status: SpotifyStatus | null, feature: Feature) {
   return (
@@ -18,15 +49,32 @@ export function granted(status: SpotifyStatus | null, feature: Feature) {
   );
 }
 
+/** The ID in `spotify:<kind>:<id>`. */
+export function idOf(uri: string): string {
+  return uri.slice(uri.lastIndexOf(':') + 1);
+}
+
 /** The key a list's pages are loaded under; Rust caches them too. */
 export function sourceKey(source: ListSource): string {
-  return source.kind === 'liked' ? 'liked' : `playlist:${source.playlist.id}`;
+  switch (source.kind) {
+    case 'playlist':
+      return `playlist:${source.playlist.id}`;
+    case 'album':
+      return `album:${idOf(source.album.uri)}`;
+    case 'show':
+      return `show:${idOf(source.show.uri)}`;
+    default:
+      return source.kind;
+  }
 }
 
 /** Spotify plays at most this many tracks from a list without a context. */
 const MAX_ITEMS = 100;
 
-/** A playlist plays from the clicked row; Liked Songs plays the loaded rows from there. */
+/**
+ * A playlist or album plays from the clicked row; an episode plays alone; Liked Songs plays the
+ * loaded rows from there.
+ */
 export function playRequestFor(
   source: ListSource,
   rows: TrackRow[],
@@ -38,6 +86,10 @@ export function playRequestFor(
       uri: `spotify:playlist:${source.playlist.id}`,
       position: row.position,
     };
+  if (source.kind === 'album')
+    return { kind: 'context', uri: source.album.uri, position: row.position };
+  if (isEpisodeList(source) && row.uri)
+    return { kind: 'items', uris: [row.uri] };
   const uris = rows
     .slice(rows.indexOf(row))
     .flatMap((item) => (item.uri ? [item.uri] : []))
@@ -67,9 +119,84 @@ export async function fetchPlaylists(_key: string, offset: number) {
 }
 
 export async function fetchTracks(key: string, offset: number) {
-  return key === 'liked'
-    ? likedTracks(offset)
-    : playlistTracks(key.slice('playlist:'.length), offset);
+  const split = key.indexOf(':');
+  const id = key.slice(split + 1);
+  switch (split < 0 ? key : key.slice(0, split)) {
+    case 'liked':
+      return likedTracks(offset);
+    case 'episodes':
+      return savedEpisodes(offset);
+    case 'album':
+      return albumTracks(id, offset);
+    case 'show':
+      return showEpisodes(id, offset);
+    default:
+      return playlistTracks(id, offset);
+  }
+}
+
+export async function fetchCatalog(key: string, offset: number) {
+  return key === 'albums' ? savedAlbums(offset) : savedShows(offset);
+}
+
+/** `savedStates` takes at most this many URIs at once. */
+const MAX_STATES = 500;
+
+export type SavedStates = {
+  /** Whether each URI asked about is saved; missing while unknown. */
+  known: Map<string, boolean>;
+  remember: (uris: string[], saved: boolean) => void;
+};
+
+/**
+ * Whether these tracks, albums or shows are saved, asked once per list (`scope`) for the URIs
+ * not known yet. Rust asks Spotify 40 at a time and remembers answers for a minute. A failure
+ * leaves them unknown, which shows as not saved.
+ */
+export function useSavedStates(
+  scope: string | null,
+  uris: string[],
+): SavedStates {
+  const [state, setState] = useState({
+    scope,
+    known: new Map<string, boolean>(),
+  });
+  if (state.scope !== scope) setState({ scope, known: new Map() });
+
+  const known =
+    state.scope === scope ? state.known : new Map<string, boolean>();
+  const missing =
+    scope === null ? '' : uris.filter((uri) => !known.has(uri)).join(',');
+  useEffect(() => {
+    if (missing === '') return;
+    let active = true;
+    const ask = missing.split(',').slice(0, MAX_STATES);
+    void savedStates(ask).then(
+      (saved) => {
+        if (!active) return;
+        setState((previous) => {
+          if (previous.scope !== scope) return previous;
+          const next = new Map(previous.known);
+          ask.forEach((uri, i) => next.set(uri, saved[i] === true));
+          return { scope, known: next };
+        });
+      },
+      () => undefined,
+    );
+    return () => {
+      active = false;
+    };
+  }, [scope, missing]);
+
+  return {
+    known,
+    remember: (changed, saved) =>
+      setState((previous) => {
+        const next = new Map(previous.known);
+        changed.forEach((uri) => next.set(uri, saved));
+        return { ...previous, known: next };
+      }),
+  };
 }
 
 type Loaded<T> = Page<T> & {
@@ -185,4 +312,94 @@ export function useEndOfList<T>(list: Paged<T>) {
     return () => observer.disconnect();
   }, [nextOffset, loading, loadMore]);
   return end;
+}
+
+/** Shorter lists render every row. */
+export const WINDOW_FROM = 150;
+/** Rows rendered beyond each edge of the screen. */
+const OVERSCAN = 20;
+
+/**
+ * The rows `[start, end)` of `count` rows of `rowHeight` px that are on screen, given the top
+ * of the list relative to the window and the window's height, with a margin either side.
+ */
+export function visibleRange(
+  top: number,
+  viewport: number,
+  rowHeight: number,
+  count: number,
+): [number, number] {
+  if (rowHeight <= 0) return [0, count];
+  const clamp = (n: number) => Math.min(count, Math.max(0, n));
+  const start = clamp(Math.floor(-top / rowHeight) - OVERSCAN);
+  const end = clamp(Math.ceil((viewport - top) / rowHeight) + OVERSCAN);
+  return [start, Math.max(start, end)];
+}
+
+export type RowWindow = {
+  start: number;
+  end: number;
+  rowHeight: number;
+};
+
+/**
+ * Long lists render only the rows near the screen, with spacer rows for the rest. Attach the
+ * returned ref to the list's `<tbody>`. The list scrolls in a different container per layout,
+ * so any scroll on the page re-measures. Until a row has a measurable height (and in short
+ * lists) every row renders.
+ */
+export function useWindow(
+  count: number,
+): [RefObject<HTMLTableSectionElement | null>, RowWindow] {
+  const body = useRef<HTMLTableSectionElement>(null);
+  const [range, setRange] = useState({ start: 0, end: count, rowHeight: 0 });
+  const enabled = count >= WINDOW_FROM;
+
+  useEffect(() => {
+    if (!enabled) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const element = body.current;
+      const row = element?.querySelector<HTMLElement>('tr:not(.spacer-row)');
+      const rowHeight = row?.getBoundingClientRect().height ?? 0;
+      if (!element || rowHeight <= 0) return;
+      const top = element.getBoundingClientRect().top;
+      const [start, end] = visibleRange(
+        top,
+        window.innerHeight,
+        rowHeight,
+        count,
+      );
+      setRange((previous) =>
+        previous.start === start &&
+        previous.end === end &&
+        previous.rowHeight === rowHeight
+          ? previous
+          : { start, end, rowHeight },
+      );
+    };
+    const schedule = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(measure);
+    };
+    schedule();
+    document.addEventListener('scroll', schedule, true);
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      document.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [enabled, count]);
+
+  if (!enabled || range.rowHeight <= 0)
+    return [body, { start: 0, end: count, rowHeight: 0 }];
+  return [
+    body,
+    {
+      start: Math.min(range.start, count),
+      end: Math.min(range.end, count),
+      rowHeight: range.rowHeight,
+    },
+  ];
 }

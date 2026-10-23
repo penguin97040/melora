@@ -3,7 +3,7 @@ import { isOraError } from './account';
 import { searchPage, searchSpotify } from '../native/client';
 import type {
   PlayRequest,
-  SearchItem,
+  CatalogItem,
   SearchKind,
   SearchResults,
 } from '../native/client';
@@ -56,6 +56,13 @@ export const sections: SearchSection[] = [
     columns: ['Playlist / owner', '', 'Tracks'],
   },
   {
+    kind: 'show',
+    key: 'shows',
+    title: 'Podcasts',
+    noun: 'podcast',
+    columns: ['Podcast / publisher', '', 'Episodes'],
+  },
+  {
     kind: 'episode',
     key: 'episodes',
     title: 'Episodes',
@@ -77,8 +84,8 @@ const MAX_ITEMS = 100;
  */
 export function searchPlayRequest(
   kind: SearchKind,
-  items: SearchItem[],
-  item: SearchItem,
+  items: CatalogItem[],
+  item: CatalogItem,
 ): PlayRequest {
   if (kind === 'track') {
     const uris = items

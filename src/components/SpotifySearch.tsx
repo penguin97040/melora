@@ -11,7 +11,7 @@ import {
   sections,
 } from '../features/search';
 import type { Searched, SearchSection } from '../features/search';
-import type { SearchItem, SearchKind } from '../native/client';
+import type { CatalogItem, SearchKind } from '../native/client';
 
 type Props = {
   query: string;
@@ -22,14 +22,14 @@ type Props = {
   seeAll: SearchKind | null;
   onSeeAll: (kind: SearchKind | null) => void;
   /** "See all"'s pages. */
-  more: Paged<SearchItem>;
+  more: Paged<CatalogItem>;
   /** The `open.spotify.com` page of what's playing now, to mark its row. */
   playingUrl: string | null;
-  onPlay: (kind: SearchKind, items: SearchItem[], item: SearchItem) => void;
+  onPlay: (kind: SearchKind, items: CatalogItem[], item: CatalogItem) => void;
 };
 
 /** The subtitle and the two cells after the title, per kind. */
-function cells(kind: SearchKind, item: SearchItem): [string, string, string] {
+function cells(kind: SearchKind, item: CatalogItem): [string, string, string] {
   const by = item.by.join(', ');
   const time = item.durationMs === null ? '' : trackTime(item.durationMs);
   const count = item.total === null ? '' : item.total.toLocaleString('en-NZ');
@@ -42,6 +42,8 @@ function cells(kind: SearchKind, item: SearchItem): [string, string, string] {
       return [by, item.releaseDate.slice(0, 4), count];
     case 'playlist':
       return [by ? `By ${by}` : 'Spotify playlist', '', count];
+    case 'show':
+      return [by ? `From ${by}` : 'Podcast', '', count];
     case 'episode':
       return ['Podcast episode', releaseDate(item.releaseDate), time];
   }
@@ -54,9 +56,9 @@ function ResultTable({
   onPlay,
 }: {
   section: SearchSection;
-  items: SearchItem[];
+  items: CatalogItem[];
   playingUrl: string | null;
-  onPlay: (item: SearchItem) => void;
+  onPlay: (item: CatalogItem) => void;
 }) {
   const [title, third, fourth] = section.columns;
   return (
@@ -138,8 +140,8 @@ export function SpotifySearch({
         <h1>{section ? section.title : 'Search'}</h1>
         <p className="intro">
           {section
-            ? `Spotify’s ${section.noun}s for “${wanted}”. Select a title to play it.`
-            : 'Songs, artists, albums, playlists and podcast episodes from Spotify. Select a title to play it.'}
+            ? `Spotify’s ${section.noun}s for “${wanted}”. Select a title to ${section.kind === 'show' ? 'open' : 'play'} it.`
+            : 'Songs, artists, albums, playlists, podcasts and episodes from Spotify. Select a title to play it, or a podcast to open it.'}
         </p>
         <div className="collection-meta">
           {section && <span>{countLabel(more.total, section.noun)}</span>}
@@ -162,7 +164,7 @@ export function SpotifySearch({
           value={query}
           maxLength={MAX_QUERY}
           onChange={(e) => onQuery(e.target.value)}
-          placeholder="Song, artist, album, playlist or episode…"
+          placeholder="Song, artist, album, playlist or podcast…"
         />
       </div>
       {section ? (

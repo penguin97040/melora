@@ -17,7 +17,7 @@ use crate::{
     store::CredentialStore,
     Ora,
 };
-use ora_types::{Feature, OraError, SearchKind, SearchPage, SearchResults};
+use ora_types::{CatalogPage, Feature, OraError, SearchKind, SearchResults};
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -26,7 +26,7 @@ pub const MAX_QUERY_CHARS: usize = 200;
 
 pub struct Search {
     results: Cache<SearchResults>,
-    pages: Cache<SearchPage>,
+    pages: Cache<CatalogPage>,
     /// Bumped by every new search, so older ones still waiting give up.
     latest: watch::Sender<u64>,
 }
@@ -73,7 +73,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         query: &str,
         kind: SearchKind,
         offset: u32,
-    ) -> Result<SearchPage, OraError> {
+    ) -> Result<CatalogPage, OraError> {
         self.require(Feature::Search)?;
         let query = clean(query)?;
         if offset.saturating_add(api::SEARCH_PAGE) > api::SEARCH_LIMIT {

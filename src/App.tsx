@@ -5,16 +5,20 @@ import { Player } from './components/Player';
 import { SpotifyAccount } from './components/SpotifyAccount';
 import { SpotifyList } from './components/SpotifyList';
 import { SpotifyPlaylists } from './components/SpotifyPlaylists';
+import { SpotifyCatalog } from './components/SpotifyCatalog';
 import { SpotifySearch } from './components/SpotifySearch';
 import { WindowHeader } from './components/WindowHeader';
 import { accountName, profileRetryable } from './features/account';
 import {
+  fetchCatalog,
   fetchPlaylists,
   fetchTracks,
   granted,
+  isCatalog,
   playRequestFor,
   sourceKey,
   usePaged,
+  useSavedStates,
 } from './features/library';
 import type { ListSource } from './features/library';
 import {
@@ -46,6 +50,7 @@ import {
   refreshPlayback,
   savePreferences,
   sendPlaybackCommand,
+  setSaved,
   showMainWindow,
   subscribePlayback,
   subscribeSpotify,
@@ -57,7 +62,7 @@ import type {
   PlayerCommand,
   PlayRequest,
   Preferences,
-  SearchItem,
+  CatalogItem,
   SearchKind,
   SpotifyStatus,
   TrackRow,
@@ -328,10 +333,32 @@ export default function App() {
   // Signing out, or a sign-in without the permission, goes back to the preview.
   const shown = showPlaylists ? source : null;
   const list = usePaged(
-    shown && (shown.kind === 'liked' || shown.playlist.readable)
+    shown &&
+      !isCatalog(shown) &&
+      (shown.kind !== 'playlist' || shown.playlist.readable)
       ? sourceKey(shown)
       : null,
     fetchTracks,
+  );
+  const catalog = usePaged(
+    shown && isCatalog(shown) ? sourceKey(shown) : null,
+    fetchCatalog,
+  );
+  // Whether the list's tracks (and the album or show itself) are saved, asked per list. Liked
+  // Songs are saved by definition.
+  const savedUris =
+    shown && !isCatalog(shown) && shown.kind !== 'liked'
+      ? [
+          ...(shown.kind === 'album' ? [shown.album.uri] : []),
+          ...(shown.kind === 'show' ? [shown.show.uri] : []),
+          ...list.items.flatMap((row) =>
+            row.uri?.startsWith('spotify:track:') ? [row.uri] : [],
+          ),
+        ]
+      : [];
+  const saved = useSavedStates(
+    shown && mayLike ? `${profile?.id ?? ''}:${sourceKey(shown)}` : null,
+    savedUris,
   );
   // Signed in, Search searches Spotify; signed out, it filters the preview tracks.
   const searchesSpotify = granted(spotify, 'Search');
@@ -367,20 +394,49 @@ export default function App() {
     setPlayMessage(null);
   }
 
+  /** Opens a saved album's or show's page (or a podcast found by search). */
+  function openItem(item: CatalogItem): void {
+    chooseList(
+      item.uri.startsWith('spotify:show:')
+        ? { kind: 'show', show: item }
+        : { kind: 'album', album: item },
+    );
+  }
+
   function playResult(
     kind: SearchKind,
-    items: SearchItem[],
-    item: SearchItem,
+    items: CatalogItem[],
+    item: CatalogItem,
   ): void {
-    playFrom(searchPlayRequest(kind, items, item));
+    if (kind === 'show') openItem(item);
+    else playFrom(searchPlayRequest(kind, items, item));
   }
 
   /** Signs in again with the permission `feature` needs, then loads the list again. */
   function allow(feature: Feature): void {
     void allowFeature(feature).then(
-      () => list.retry(),
+      () => {
+        list.retry();
+        catalog.retry();
+      },
       (error: unknown) => setWindowMessage(describeFailure(error)),
     );
+  }
+
+  /**
+   * A row's or heading's +: saves the track (to Liked Songs), album or show, or removes it. The
+   * first use asks Spotify for library access, then carries on.
+   */
+  function saveItem(uri: string, isSaved: boolean): void {
+    void (async () => {
+      try {
+        if (!mayLike && !libraryAllowed(await allowLibrary())) return;
+        await setSaved([uri], !isSaved);
+        saved.remember([uri], !isSaved);
+      } catch (error) {
+        setWindowMessage(describeFailure(error));
+      }
+    })();
   }
 
   /** The + control. The first use asks Spotify for library access, then carries on. */
@@ -392,6 +448,11 @@ export default function App() {
         setLikeMessage(
           liked ? 'Added to Liked Songs' : 'Removed from Liked Songs',
         );
+        // The same song's row + follows.
+        const track = nowUrl?.match(
+          /^https:\/\/open\.spotify\.com\/track\/(\w+)$/,
+        );
+        if (track) saved.remember([`spotify:track:${track[1]}`], liked);
       } catch (error) {
         setWindowMessage(describeFailure(error));
       }
@@ -643,11 +704,20 @@ export default function App() {
               playingUrl={nowUrl}
               onPlay={playResult}
             />
-          ) : spotifyList && shown ? (
+          ) : spotifyList && shown && isCatalog(shown) ? (
+            <SpotifyCatalog
+              source={shown}
+              list={catalog}
+              onOpenItem={openItem}
+              onAllow={allow}
+            />
+          ) : spotifyList && shown && !isCatalog(shown) ? (
             <SpotifyList
               source={shown}
               list={list}
               playingUrl={nowUrl}
+              saved={saved.known}
+              onSave={saveItem}
               onPlay={playRow}
               onPlayAll={() =>
                 shown.kind === 'playlist' &&

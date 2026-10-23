@@ -319,7 +319,7 @@ impl Playback {
     }
 
     /// Records Spotify's answer for `item`, unless another item is playing by now.
-    fn set_liked(&self, item: &SpotifyUri, liked: bool) {
+    pub(crate) fn set_liked(&self, item: &SpotifyUri, liked: bool) {
         let page = item.page();
         self.status
             .send_if_modified(|status| match &mut status.now_playing {
@@ -533,6 +533,8 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         .await?;
         self.playback().set_liked(&item, !liked);
         self.library().forget_liked();
+        self.library()
+            .remember_saved(&self.cache_scope(), &item, !liked);
         Ok(!liked)
     }
 

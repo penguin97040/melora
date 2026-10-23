@@ -33,7 +33,8 @@ pub struct PlaylistPage {
     pub next_offset: Option<u32>,
 }
 
-/// A row in a track list: a playlist's items or Liked Songs.
+/// A row in a track list: a playlist's items, Liked Songs, an album's tracks, a show's episodes
+/// or saved episodes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -46,8 +47,10 @@ pub struct TrackRow {
     pub uri: Option<String>,
     pub name: String,
     pub artists: Vec<String>,
-    /// The album, or the show for an episode.
+    /// The album, or the show for an episode; empty in an album's or show's own list.
     pub album: String,
+    /// An episode's release date (`YYYY`, `YYYY-MM` or `YYYY-MM-DD`); empty for tracks.
+    pub release_date: String,
     pub duration_ms: u64,
     pub spotify_url: Option<String>,
 }

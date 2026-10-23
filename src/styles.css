@@ -409,6 +409,23 @@ p {
   text-align: right;
   white-space: nowrap;
 }
+/* A row's + sits before its time; the heading's beside the collection meta. */
+.duration .like-button,
+.collection-meta .like-button {
+  display: inline-grid;
+  vertical-align: middle;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 0.5rem;
+}
+.collection-meta .like-button {
+  margin: -0.4rem 0;
+}
+/* Rows a long list doesn't render: they keep the scroll height. */
+.track-table .spacer-row td {
+  padding: 0;
+  border: 0;
+}
 .selected-track {
   background: var(--selection);
 }

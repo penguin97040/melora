@@ -11,9 +11,9 @@ import type { PlayRequest } from './bindings/PlayRequest';
 import type { PlaylistPage } from './bindings/PlaylistPage';
 import type { PlaylistSummary } from './bindings/PlaylistSummary';
 import type { Profile } from './bindings/Profile';
-import type { SearchItem } from './bindings/SearchItem';
+import type { CatalogItem } from './bindings/CatalogItem';
 import type { SearchKind } from './bindings/SearchKind';
-import type { SearchPage } from './bindings/SearchPage';
+import type { CatalogPage } from './bindings/CatalogPage';
 import type { SearchResults } from './bindings/SearchResults';
 import type { Status } from './bindings/Status';
 import type { TrackPage } from './bindings/TrackPage';
@@ -29,9 +29,9 @@ export type {
   PlaylistPage,
   PlaylistSummary,
   Profile,
-  SearchItem,
+  CatalogItem,
   SearchKind,
-  SearchPage,
+  CatalogPage,
   SearchResults,
   TrackPage,
   TrackRow,
@@ -58,7 +58,7 @@ export const defaultPreferences: Preferences = {
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
     return {
-      version: '0.5.3',
+      version: '0.5.4',
       platform: 'Browser preview',
       preferences: defaultPreferences,
       storageError: null,
@@ -298,6 +298,54 @@ export async function likedTracks(offset: number): Promise<TrackPage> {
   return invoke<TrackPage>('plugin:ora|liked_tracks', { offset });
 }
 
+/** One page of saved albums, newest first. */
+export async function savedAlbums(offset: number): Promise<CatalogPage> {
+  requireDesktop();
+  return invoke<CatalogPage>('plugin:ora|saved_albums', { offset });
+}
+
+/** One page of saved shows (podcasts). */
+export async function savedShows(offset: number): Promise<CatalogPage> {
+  requireDesktop();
+  return invoke<CatalogPage>('plugin:ora|saved_shows', { offset });
+}
+
+/** One page of saved episodes, newest first. */
+export async function savedEpisodes(offset: number): Promise<TrackPage> {
+  requireDesktop();
+  return invoke<TrackPage>('plugin:ora|saved_episodes', { offset });
+}
+
+/** One page of an album's tracks. */
+export async function albumTracks(
+  id: string,
+  offset: number,
+): Promise<TrackPage> {
+  requireDesktop();
+  return invoke<TrackPage>('plugin:ora|album_tracks', { id, offset });
+}
+
+/** One page of a show's episodes, newest first. */
+export async function showEpisodes(
+  id: string,
+  offset: number,
+): Promise<TrackPage> {
+  requireDesktop();
+  return invoke<TrackPage>('plugin:ora|show_episodes', { id, offset });
+}
+
+/** Whether each track, album, show or episode is saved, in the order asked (≤ 500). */
+export async function savedStates(uris: string[]): Promise<boolean[]> {
+  requireDesktop();
+  return invoke<boolean[]>('plugin:ora|saved_states', { uris });
+}
+
+/** Saves items to the library (a track: Liked Songs), or removes them. */
+export async function setSaved(uris: string[], saved: boolean): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|set_saved', { uris, saved });
+}
+
 /** The first page of each kind of result. A newer search rejects this one with `cancelled`. */
 export async function searchSpotify(query: string): Promise<SearchResults> {
   requireDesktop();
@@ -309,9 +357,9 @@ export async function searchPage(
   query: string,
   kind: SearchKind,
   offset: number,
-): Promise<SearchPage> {
+): Promise<CatalogPage> {
   requireDesktop();
-  return invoke<SearchPage>('plugin:ora|search_page', { query, kind, offset });
+  return invoke<CatalogPage>('plugin:ora|search_page', { query, kind, offset });
 }
 
 /** Plays from a list on the active device, or on Melora's own. */

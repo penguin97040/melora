@@ -8,8 +8,8 @@ use crate::{
     secret::Secret,
 };
 use ora_types::{
-    DeviceKind, Disallows, ForbiddenHint, OraError, PlaylistPage, PlaylistSummary, Profile,
-    RepeatMode, SdkState, SdkTrack, SearchItem, SearchKind, SearchPage, SearchResults, TrackPage,
+    CatalogItem, CatalogPage, DeviceKind, Disallows, ForbiddenHint, OraError, PlaylistPage,
+    PlaylistSummary, Profile, RepeatMode, SdkState, SdkTrack, SearchKind, SearchResults, TrackPage,
     TrackRow,
 };
 use serde::Deserialize;
@@ -448,6 +448,8 @@ struct ItemBody {
     show: Option<NamedBody>,
     #[serde(default)]
     images: Vec<ImageBody>,
+    /// An episode's.
+    release_date: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -718,6 +720,8 @@ struct EntryBody {
     is_local: bool,
     item: Option<ItemBody>,
     track: Option<ItemBody>,
+    /// A saved episode.
+    episode: Option<ItemBody>,
 }
 
 /// `GET /me/playlists?limit=50&offset=…`. `me` is the account's Spotify ID, to tell which
@@ -800,9 +804,25 @@ fn track_page(body: PageBody<EntryBody>, offset: u32) -> TrackPage {
         .zip(offset..)
         .filter_map(|(entry, position)| {
             let entry = entry?;
-            let item = entry.item.or(entry.track)?;
+            let item = entry.item.or(entry.track).or(entry.episode)?;
             Some(track_row(item, position, entry.is_local))
         })
+        .collect();
+    TrackPage {
+        items,
+        total: body.total,
+        next_offset,
+    }
+}
+
+/// Lists whose items aren't wrapped: an album's tracks or a show's episodes.
+fn item_page(body: PageBody<ItemBody>, offset: u32) -> TrackPage {
+    let next_offset = body.next_offset(offset);
+    let items = body
+        .items
+        .into_iter()
+        .zip(offset..)
+        .filter_map(|(item, position)| Some(track_row(item?, position, false)))
         .collect();
     TrackPage {
         items,
@@ -836,6 +856,10 @@ fn track_row(item: ItemBody, position: u32, local: bool) -> TrackRow {
             .filter(|artist| !artist.is_empty())
             .collect(),
         album: clip(&album, MAX_TEXT),
+        release_date: item
+            .release_date
+            .filter(|date| is_release_date(date))
+            .unwrap_or_default(),
         duration_ms: item.duration_ms.min(MAX_DURATION_MS),
         spotify_url: link.as_ref().map(SpotifyUri::page),
     }
@@ -862,6 +886,9 @@ struct ResultBody {
     release_date: Option<String>,
     total_tracks: Option<u32>,
     owner: Option<OwnerBody>,
+    /// A show's; deprecated by Spotify but still sent.
+    publisher: Option<String>,
+    total_episodes: Option<u32>,
     /// A playlist's count; renamed from `tracks` in 2026, both are read.
     items: Option<CountBody>,
     tracks: Option<CountBody>,
@@ -874,6 +901,7 @@ struct SearchBody {
     artists: Option<PageBody<ResultBody>>,
     albums: Option<PageBody<ResultBody>>,
     playlists: Option<PageBody<ResultBody>>,
+    shows: Option<PageBody<ResultBody>>,
     episodes: Option<PageBody<ResultBody>>,
 }
 
@@ -884,13 +912,146 @@ impl SearchBody {
             SearchKind::Artist => self.artists.take(),
             SearchKind::Album => self.albums.take(),
             SearchKind::Playlist => self.playlists.take(),
+            SearchKind::Show => self.shows.take(),
             SearchKind::Episode => self.episodes.take(),
         }
     }
 }
 
-/// `GET /search?q=…&type=track,artist,album,playlist,episode&limit=10`: the first page of each
-/// kind.
+/// A saved album (`album`) or show (`show`).
+#[derive(Deserialize)]
+struct SavedBody {
+    album: Option<ResultBody>,
+    show: Option<ResultBody>,
+}
+
+/// `GET /me/albums?limit=50&offset=…`: saved albums, newest first.
+pub async fn saved_albums<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    offset: u32,
+) -> Result<CatalogPage, ApiError> {
+    let url = format!("{API_BASE}/me/albums?limit={PAGE}&offset={offset}");
+    let body: PageBody<SavedBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    Ok(saved_page(SearchKind::Album, body, offset))
+}
+
+/// `GET /me/shows?limit=50&offset=…`: saved shows (podcasts).
+pub async fn saved_shows<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    offset: u32,
+) -> Result<CatalogPage, ApiError> {
+    let url = format!("{API_BASE}/me/shows?limit={PAGE}&offset={offset}");
+    let body: PageBody<SavedBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    Ok(saved_page(SearchKind::Show, body, offset))
+}
+
+fn saved_page(kind: SearchKind, body: PageBody<SavedBody>, offset: u32) -> CatalogPage {
+    let next_offset = body.next_offset(offset);
+    let items = body
+        .items
+        .into_iter()
+        .zip(offset..)
+        .filter_map(|(saved, position)| {
+            let saved = saved?;
+            search_item(kind, saved.album.or(saved.show)?, position)
+        })
+        .collect();
+    CatalogPage {
+        items,
+        total: body.total,
+        next_offset,
+    }
+}
+
+/// `GET /me/episodes?limit=50&offset=…`: saved episodes ("Your Episodes"), newest first.
+pub async fn saved_episodes<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    offset: u32,
+) -> Result<TrackPage, ApiError> {
+    let url = format!("{API_BASE}/me/episodes?limit={PAGE}&offset={offset}");
+    let body: PageBody<EntryBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    Ok(track_page(body, offset))
+}
+
+/// `GET /albums/{id}/tracks?limit=50&offset=…`.
+pub async fn album_tracks<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    id: &str,
+    offset: u32,
+) -> Result<TrackPage, ApiError> {
+    let url = format!(
+        "{API_BASE}/albums/{}/tracks?limit={PAGE}&offset={offset}",
+        encode(id)
+    );
+    let body: PageBody<ItemBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    Ok(item_page(body, offset))
+}
+
+/// `GET /shows/{id}/episodes?limit=50&offset=…`, newest first.
+pub async fn show_episodes<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    id: &str,
+    offset: u32,
+) -> Result<TrackPage, ApiError> {
+    let url = format!(
+        "{API_BASE}/shows/{}/episodes?limit={PAGE}&offset={offset}",
+        encode(id)
+    );
+    let body: PageBody<ItemBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    Ok(item_page(body, offset))
+}
+
+/// Spotify's limit for `/me/library` and `/me/library/contains`.
+pub const LIBRARY_BATCH: usize = 40;
+
+/// `GET /me/library/contains?uris=…` for up to 40 items, in the same order.
+pub async fn library_contains_many<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    items: &[SpotifyUri],
+) -> Result<Vec<bool>, ApiError> {
+    let url = format!(
+        "{API_BASE}/me/library/contains?uris={}",
+        encode(&uri_list(items))
+    );
+    let response = library_send(http, access, Method::Get, url).await?;
+    let saved: Vec<bool> =
+        serde_json::from_slice(&response.body).map_err(|_| ApiError::Other(OraError::Network))?;
+    if saved.len() == items.len() {
+        Ok(saved)
+    } else {
+        Err(ApiError::Other(OraError::Network))
+    }
+}
+
+/// `PUT /me/library?uris=…` to save up to 40 items, `DELETE` to remove them.
+pub async fn library_set_many<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    items: &[SpotifyUri],
+    saved: bool,
+) -> Result<(), ApiError> {
+    let url = format!("{API_BASE}/me/library?uris={}", encode(&uri_list(items)));
+    let method = if saved { Method::Put } else { Method::Delete };
+    library_send(http, access, method, url).await.map(drop)
+}
+
+fn uri_list(items: &[SpotifyUri]) -> String {
+    debug_assert!((1..=LIBRARY_BATCH).contains(&items.len()));
+    items
+        .iter()
+        .map(SpotifyUri::uri)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// `GET /search?q=…&type=track,artist,album,playlist,show,episode&limit=10`: the first page of
+/// each kind.
 pub async fn search<H: HttpClient>(
     http: &H,
     access: &Secret,
@@ -908,6 +1069,7 @@ pub async fn search<H: HttpClient>(
         artists: page(SearchKind::Artist),
         albums: page(SearchKind::Album),
         playlists: page(SearchKind::Playlist),
+        shows: page(SearchKind::Show),
         episodes: page(SearchKind::Episode),
     })
 }
@@ -919,7 +1081,7 @@ pub async fn search_more<H: HttpClient>(
     query: &str,
     kind: SearchKind,
     offset: u32,
-) -> Result<SearchPage, ApiError> {
+) -> Result<CatalogPage, ApiError> {
     let url = format!(
         "{API_BASE}/search?q={}&type={}&limit={SEARCH_PAGE}&offset={offset}",
         encode(query),
@@ -931,9 +1093,9 @@ pub async fn search_more<H: HttpClient>(
 
 /// Results keep their place among all of the kind's results; `null`s and results whose link
 /// isn't of the kind asked for are skipped.
-fn search_page(kind: SearchKind, body: Option<PageBody<ResultBody>>, offset: u32) -> SearchPage {
+fn search_page(kind: SearchKind, body: Option<PageBody<ResultBody>>, offset: u32) -> CatalogPage {
     let Some(body) = body else {
-        return SearchPage {
+        return CatalogPage {
             items: Vec::new(),
             total: 0,
             next_offset: None,
@@ -948,14 +1110,14 @@ fn search_page(kind: SearchKind, body: Option<PageBody<ResultBody>>, offset: u32
         .zip(offset..)
         .filter_map(|(result, position)| search_item(kind, result?, position))
         .collect();
-    SearchPage {
+    CatalogPage {
         items,
         total: body.total,
         next_offset,
     }
 }
 
-fn search_item(kind: SearchKind, body: ResultBody, position: u32) -> Option<SearchItem> {
+fn search_item(kind: SearchKind, body: ResultBody, position: u32) -> Option<CatalogItem> {
     // A playlist's ID is enough when its URI is missing.
     let uri = match body.uri {
         Some(uri) => uri,
@@ -963,15 +1125,16 @@ fn search_item(kind: SearchKind, body: ResultBody, position: u32) -> Option<Sear
         None => return None,
     };
     let link = crate::link::parse(&uri).filter(|link| link.kind.name() == kind.name())?;
-    let by = match body.owner {
-        Some(owner) => owner.display_name.into_iter().collect(),
-        None => body
+    let by = match (body.owner, body.publisher) {
+        (Some(owner), _) => owner.display_name.into_iter().collect(),
+        (None, Some(publisher)) => vec![publisher],
+        (None, None) => body
             .artists
             .into_iter()
             .filter_map(|artist| artist.name)
             .collect(),
     };
-    Some(SearchItem {
+    Some(CatalogItem {
         position,
         uri: link.uri(),
         name: clip(&body.name.unwrap_or_default(), MAX_TEXT),
@@ -986,6 +1149,7 @@ fn search_item(kind: SearchKind, body: ResultBody, position: u32) -> Option<Sear
             .unwrap_or_default(),
         total: body
             .total_tracks
+            .or(body.total_episodes)
             .or(body.items.or(body.tracks).map(|count| count.total)),
         duration_ms: body.duration_ms.map(|ms| ms.min(MAX_DURATION_MS)),
         playable: body.is_playable != Some(false),

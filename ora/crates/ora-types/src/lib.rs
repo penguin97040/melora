@@ -16,4 +16,4 @@ pub use playback::{
     Device, DeviceKind, Disallows, NowPlaying, PlaybackIssue, PlaybackStatus, PlayerCommand, Probe,
     RepeatMode, SdkErrorKind, SdkEvent, SdkState, SdkTrack, Tier,
 };
-pub use search::{SearchItem, SearchKind, SearchPage, SearchResults};
+pub use search::{CatalogItem, CatalogPage, SearchKind, SearchResults};

@@ -8,8 +8,8 @@ use ora_core::{
     http::ReqwestClient,
     store::KeyringStore,
     types::{
-        Device, Feature, OraError, PlayRequest, PlaybackStatus, PlayerCommand, PlaylistPage,
-        Profile, SdkEvent, SearchKind, SearchPage, SearchResults, Status, TrackPage,
+        CatalogPage, Device, Feature, OraError, PlayRequest, PlaybackStatus, PlayerCommand,
+        PlaylistPage, Profile, SdkEvent, SearchKind, SearchResults, Status, TrackPage,
     },
     Options, Ora,
 };
@@ -112,6 +112,13 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             playlists,
             playlist_tracks,
             liked_tracks,
+            saved_albums,
+            saved_shows,
+            saved_episodes,
+            album_tracks,
+            show_episodes,
+            saved_states,
+            set_saved,
             search,
             search_page,
             play
@@ -447,9 +454,89 @@ async fn search_page<R: Runtime>(
     query: String,
     kind: SearchKind,
     offset: u32,
-) -> Result<SearchPage, OraError> {
+) -> Result<CatalogPage, OraError> {
     main_only(&window)?;
     ora.0.search_page(&query, kind, offset).await
+}
+
+/// One page of saved albums.
+#[tauri::command]
+async fn saved_albums<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    offset: u32,
+) -> Result<CatalogPage, OraError> {
+    main_only(&window)?;
+    ora.0.saved_albums(offset).await
+}
+
+/// One page of saved shows (podcasts).
+#[tauri::command]
+async fn saved_shows<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    offset: u32,
+) -> Result<CatalogPage, OraError> {
+    main_only(&window)?;
+    ora.0.saved_shows(offset).await
+}
+
+/// One page of saved episodes.
+#[tauri::command]
+async fn saved_episodes<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    offset: u32,
+) -> Result<TrackPage, OraError> {
+    main_only(&window)?;
+    ora.0.saved_episodes(offset).await
+}
+
+/// One page of an album's tracks.
+#[tauri::command]
+async fn album_tracks<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    id: String,
+    offset: u32,
+) -> Result<TrackPage, OraError> {
+    main_only(&window)?;
+    ora.0.album_tracks(&id, offset).await
+}
+
+/// One page of a show's episodes.
+#[tauri::command]
+async fn show_episodes<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    id: String,
+    offset: u32,
+) -> Result<TrackPage, OraError> {
+    main_only(&window)?;
+    ora.0.show_episodes(&id, offset).await
+}
+
+/// Whether each track, album, show or episode is saved, in the order asked.
+#[tauri::command]
+async fn saved_states<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    uris: Vec<String>,
+) -> Result<Vec<bool>, OraError> {
+    main_only(&window)?;
+    ora.0.saved_states(&uris).await
+}
+
+/// Saves the items to the library (a track: Liked Songs), or removes them.
+#[tauri::command]
+async fn set_saved<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    uris: Vec<String>,
+    saved: bool,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.set_saved(&uris, saved).await
 }
 
 /// Plays from a list on the active device, or on this app's own. A refresh follows, so a

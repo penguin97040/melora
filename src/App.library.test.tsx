@@ -101,6 +101,7 @@ function row(position: number, name: string, uri: string | null): TrackRow {
     name,
     artists: ['Artist A', 'Artist B'],
     album: 'Album',
+    releaseDate: '',
     durationMs: 3_725_000,
     spotifyUrl: id ? `https://open.spotify.com/track/${id}` : null,
   };
@@ -167,7 +168,7 @@ describe('Spotify playlists and Liked Songs', () => {
     const sidebar = await screen.findByRole('region', {
       name: 'Your Spotify playlists',
     });
-    expect(within(sidebar).getByText('03')).toBeInTheDocument();
+    expect(within(sidebar).getByText('06')).toBeInTheDocument();
     expect(within(sidebar).getAllByText('Kiri · 3 tracks')).toHaveLength(2);
     await user.click(
       within(sidebar).getByRole('button', { name: /Road trip/ }),
@@ -181,9 +182,9 @@ describe('Spotify playlists and Liked Songs', () => {
 
     // Local files stay listed but can't be played.
     expect(
-      screen.getByRole('button', { name: /Home recording/ }),
+      screen.getByRole('button', { name: /^Home recording/ }),
     ).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: /Third/ }));
+    await user.click(screen.getByRole('button', { name: /^Third/ }));
     expect(activatePlayback).toHaveBeenCalled();
     expect(playFromList).toHaveBeenCalledWith({
       kind: 'context',
@@ -210,12 +211,12 @@ describe('Spotify playlists and Liked Songs', () => {
       await screen.findByRole('button', { name: 'Show more tracks' }),
     );
     expect(likedTracks).toHaveBeenLastCalledWith(50);
-    await user.click(await screen.findByRole('button', { name: /Older/ }));
+    await user.click(await screen.findByRole('button', { name: /^Older/ }));
     expect(playFromList).toHaveBeenCalledWith({
       kind: 'items',
       uris: [TRACK(2), TRACK(3)],
     });
-    expect(screen.getByRole('button', { name: /Newest/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Newest/ })).toBeEnabled();
   });
 
   it('explains playlists Spotify won’t list, and still plays them', async () => {
@@ -251,7 +252,7 @@ describe('Spotify playlists and Liked Songs', () => {
     await user.click(screen.getByRole('button', { name: 'Allow' }));
     expect(allowFeature).toHaveBeenCalledWith('SavedTracks');
     expect(
-      await screen.findByRole('button', { name: /Newest/ }),
+      await screen.findByRole('button', { name: /^Newest/ }),
     ).toBeInTheDocument();
   });
 
@@ -265,11 +266,11 @@ describe('Spotify playlists and Liked Songs', () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole('button', { name: /Road trip/ }));
-    await user.click(await screen.findByRole('button', { name: /First/ }));
+    await user.click(await screen.findByRole('button', { name: /^First/ }));
     expect(
       await screen.findByText(/No Spotify device is active/),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /First/ }));
+    await user.click(screen.getByRole('button', { name: /^First/ }));
     await waitFor(() =>
       expect(
         screen.queryByText(/No Spotify device is active/),

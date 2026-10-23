@@ -10,10 +10,42 @@ type Props = {
   onSelect: (source: ListSource) => void;
 };
 
-/** The sidebar's playlists while signed in: Liked Songs, then the account's own list. */
+/** The library's own lists, above the playlists. */
+const LIBRARY: {
+  source: ListSource;
+  icon: string;
+  name: string;
+  subtitle: string;
+}[] = [
+  {
+    source: { kind: 'liked' },
+    icon: '♡',
+    name: 'Liked Songs',
+    subtitle: 'Your saved tracks',
+  },
+  {
+    source: { kind: 'albums' },
+    icon: '◎',
+    name: 'Albums',
+    subtitle: 'Your saved albums',
+  },
+  {
+    source: { kind: 'shows' },
+    icon: '◉',
+    name: 'Podcasts',
+    subtitle: 'Podcasts you follow',
+  },
+  {
+    source: { kind: 'episodes' },
+    icon: '▷',
+    name: 'Your Episodes',
+    subtitle: 'Your saved episodes',
+  },
+];
+
+/** The sidebar's library while signed in: Liked Songs and the saved lists, then playlists. */
 export function SpotifyPlaylists({ playlists, selected, onSelect }: Props) {
-  const liked: ListSource = { kind: 'liked' };
-  const count = playlists.total + 1;
+  const count = playlists.total + LIBRARY.length;
   return (
     <section className="playlists" aria-label="Your Spotify playlists">
       <div className="panel-label">
@@ -21,17 +53,23 @@ export function SpotifyPlaylists({ playlists, selected, onSelect }: Props) {
         <span>{String(count).padStart(2, '0')}</span>
       </div>
       <div className="playlist-items">
-        <button
-          className={`playlist-item ${selected === sourceKey(liked) ? 'selected' : ''}`}
-          aria-pressed={selected === sourceKey(liked)}
-          onClick={() => onSelect(liked)}
-        >
-          <span className="playlist-icon">♡</span>
-          <span>
-            <span className="playlist-name">Liked Songs</span>
-            <span className="playlist-subtitle">Your saved tracks</span>
-          </span>
-        </button>
+        {LIBRARY.map(({ source, icon, name, subtitle }) => {
+          const active = selected === sourceKey(source);
+          return (
+            <button
+              key={name}
+              className={`playlist-item ${active ? 'selected' : ''}`}
+              aria-pressed={active}
+              onClick={() => onSelect(source)}
+            >
+              <span className="playlist-icon">{icon}</span>
+              <span>
+                <span className="playlist-name">{name}</span>
+                <span className="playlist-subtitle">{subtitle}</span>
+              </span>
+            </button>
+          );
+        })}
         {playlists.items.map((playlist) => {
           const source: ListSource = { kind: 'playlist', playlist };
           const active = selected === sourceKey(source);

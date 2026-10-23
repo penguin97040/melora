@@ -14,9 +14,9 @@ import {
   subscribeSpotify,
 } from './native/client';
 import type {
-  SearchItem,
+  CatalogItem,
   SearchKind,
-  SearchPage,
+  CatalogPage,
   SearchResults,
   SpotifyStatus,
 } from './native/client';
@@ -74,8 +74,8 @@ function item(
   kind: SearchKind,
   position: number,
   name: string,
-  more: Partial<SearchItem> = {},
-): SearchItem {
+  more: Partial<CatalogItem> = {},
+): CatalogItem {
   const id = `${kind.slice(0, 4)}${position}`.padEnd(22, 'x');
   return {
     position,
@@ -92,7 +92,7 @@ function item(
   };
 }
 
-function page(items: SearchItem[], total = items.length): SearchPage {
+function page(items: CatalogItem[], total = items.length): CatalogPage {
   return { items, total, nextOffset: total > items.length ? 10 : null };
 }
 
@@ -116,6 +116,7 @@ const RESULTS: SearchResults = {
     }),
   ]),
   playlists: page([]),
+  shows: page([]),
   episodes: page([
     item('episode', 0, 'Episode one', {
       releaseDate: '2026-10-01',
@@ -129,6 +130,7 @@ const NOTHING: SearchResults = {
   artists: page([]),
   albums: page([]),
   playlists: page([]),
+  shows: page([]),
   episodes: page([]),
 };
 
