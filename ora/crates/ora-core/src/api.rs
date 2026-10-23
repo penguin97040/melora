@@ -301,6 +301,60 @@ pub async fn previous<H: HttpClient>(
     player_send(http, access, Method::Post, url, None).await
 }
 
+async fn library_send<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    method: Method,
+    url: String,
+) -> Result<Response, ApiError> {
+    let response = http
+        .send(Request {
+            method,
+            url,
+            bearer: Some(access.clone()),
+            form: Vec::new(),
+            json: None,
+        })
+        .await
+        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    if matches!(response.status, 200 | 201 | 204) {
+        Ok(response)
+    } else {
+        Err(error_for(&response, ForbiddenHint::Unknown))
+    }
+}
+
+/// `GET /me/library/contains?uris=…` for one item: whether it's saved (a track: in Liked Songs).
+pub async fn library_contains<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    item: &SpotifyUri,
+) -> Result<bool, ApiError> {
+    let url = format!(
+        "{API_BASE}/me/library/contains?uris={}",
+        encode(&item.uri())
+    );
+    let response = library_send(http, access, Method::Get, url).await?;
+    let saved: Vec<bool> =
+        serde_json::from_slice(&response.body).map_err(|_| ApiError::Other(OraError::Network))?;
+    match saved.as_slice() {
+        [saved] => Ok(*saved),
+        _ => Err(ApiError::Other(OraError::Network)),
+    }
+}
+
+/// `PUT /me/library?uris=…` to save one item, `DELETE` to remove it (no body).
+pub async fn library_set<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    item: &SpotifyUri,
+    saved: bool,
+) -> Result<(), ApiError> {
+    let url = format!("{API_BASE}/me/library?uris={}", encode(&item.uri()));
+    let method = if saved { Method::Put } else { Method::Delete };
+    library_send(http, access, method, url).await.map(drop)
+}
+
 /// A Spotify Connect device as the Web API reports it. The ID never leaves `ora-core`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiDevice {
@@ -727,6 +781,50 @@ mod tests {
                     Method::Post,
                     "https://api.spotify.com/v1/me/player/previous?device_id=d1"
                 ),
+            ]
+        );
+        assert!(seen
+            .iter()
+            .all(|r| r.had_bearer && r.json.is_none() && r.form.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn library_calls_check_save_and_remove_one_item() {
+        let http = MockHttp::default();
+        http.push(200, "[true]");
+        http.push(200, "");
+        http.push(200, "");
+        http.push(200, "[true,false]");
+        http.push(403, "");
+        let access = Secret::new("a");
+        let id: String = "AbCd0123456789".chars().chain("xyzXYZ01".chars()).collect();
+        let item = crate::link::parse(&format!("spotify:track:{id}")).unwrap();
+        assert_eq!(library_contains(&http, &access, &item).await, Ok(true));
+        library_set(&http, &access, &item, true).await.unwrap();
+        library_set(&http, &access, &item, false).await.unwrap();
+        // One item was asked about, so any other answer is unreadable.
+        assert_eq!(
+            library_contains(&http, &access, &item).await,
+            Err(ApiError::Other(OraError::Network))
+        );
+        assert_eq!(
+            library_set(&http, &access, &item, true).await,
+            Err(ApiError::Other(OraError::Forbidden {
+                hint: ForbiddenHint::Unknown
+            }))
+        );
+        let seen = http.requests();
+        let uri = format!("spotify%3Atrack%3A{id}");
+        let shape: Vec<(Method, String)> = seen.iter().map(|r| (r.method, r.url.clone())).collect();
+        assert_eq!(
+            shape[..3],
+            [
+                (
+                    Method::Get,
+                    format!("{API_BASE}/me/library/contains?uris={uri}")
+                ),
+                (Method::Put, format!("{API_BASE}/me/library?uris={uri}")),
+                (Method::Delete, format!("{API_BASE}/me/library?uris={uri}")),
             ]
         );
         assert!(seen

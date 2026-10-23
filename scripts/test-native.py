@@ -579,6 +579,35 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                                'noSynthetic': True, 'plainArtwork': True, 'fits': True,
                                'deviceLine': 'Melora (this app) · Choose device',
                                'device': 'Playback device: This app'}, f'Live player wrong: {live_player}'
+        # Phase 5 (gate G4): the official logo in the header and the + ending the title line.
+        wait_script("return [...document.querySelectorAll('.player img')].every(i => i.complete && i.naturalWidth > 0);")
+        brand = execute("""
+            const player = document.querySelector('.player');
+            const label = player.querySelector('.panel-label').getBoundingClientRect();
+            const text = player.querySelector('.panel-label span').getBoundingClientRect();
+            const logo = player.querySelector('.panel-label .spotify-logo');
+            const box = logo.getBoundingClientRect();
+            const art = player.querySelector('.cover-art').getBoundingClientRect();
+            const title = player.querySelector('.track-title');
+            const titleBox = title.getBoundingClientRect();
+            const like = player.querySelector('.title-row .like-button');
+            const likeBox = like.getBoundingClientRect();
+            const lineHeight = parseFloat(getComputedStyle(title).lineHeight);
+            return {logoAlt: logo.alt, logoWidth: box.width, labelHeight: label.height,
+                clearTop: box.top - label.top, clearBottom: label.bottom - 1 - box.bottom,
+                clearRight: label.right - box.right, clearLeft: box.left - text.right,
+                logoOffArtwork: box.bottom <= art.top,
+                likeLabel: like.getAttribute('aria-label'), likeLoaded: like.querySelector('img').naturalWidth > 0,
+                likeBesideTitle: Math.abs(likeBox.top - titleBox.top) <= 1 && likeBox.left >= titleBox.right,
+                likeHeight: likeBox.height, lineHeight, artworkHeight: art.height};
+        """)
+        assert brand['logoAlt'] == 'Spotify' and brand['logoWidth'] >= 70, f'Spotify logo missing or under 70px: {brand}'
+        assert abs(brand['labelHeight'] - 40) <= 0.5, f'Header row height changed: {brand}'
+        clear = 0.5 * (219 / 225.25) * brand['logoWidth'] * 225.25 / 823.46
+        assert min(brand['clearTop'], brand['clearBottom'], brand['clearRight'], brand['clearLeft']) >= clear - 0.5, f'Logo clear space under half the icon height ({clear:.1f}px): {brand}'
+        assert brand['logoOffArtwork'], f'Logo overlaps the artwork: {brand}'
+        assert brand['likeLabel'] == 'Add to Liked Songs' and brand['likeLoaded'] and brand['likeBesideTitle'], f'+ control wrong: {brand}'
+        assert brand['likeHeight'] <= brand['lineHeight'] + 0.5, f'+ taller than the title line: {brand}'
         (output / 'melora-linux-live-player.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         execute("""
             window.__liveDone = false;
@@ -592,6 +621,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         (output / 'native-acceptance.json').write_text(json.dumps({
             'embedded_playback': 'signed-out refusals (access_token, play_here, playback_command), malformed report refused, probe accepted, no SDK script, test block shown',
             'live_player': 'synthetic SDK reports: real track, disallowed Next disabled, Open in Spotify, plain artwork, fits at 1440x940/100%, footer This app, preview restored',
+            'spotify_brand': {key: round(brand[key], 1) for key in ('logoWidth', 'labelHeight', 'clearTop', 'clearBottom', 'clearRight', 'clearLeft', 'likeHeight', 'lineHeight', 'artworkHeight')},
             'engine_drm_probe': {key: engine_probe[key] for key in ('secure', 'widevine', 'playready', 'fairplay')},
             'spotify_account': 'plugin status, invalid Client ID and URL rejection, masked save and Settings screenshots passed; sign-in not run',
             'platform': 'linux', 'ipc': 'passed', 'keyboard_selection': 'passed',

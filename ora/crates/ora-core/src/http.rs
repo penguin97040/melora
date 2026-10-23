@@ -11,6 +11,7 @@ pub enum Method {
     Get,
     Post,
     Put,
+    Delete,
 }
 
 pub struct Request {
@@ -89,6 +90,7 @@ impl HttpClient for ReqwestClient {
             Method::Get => self.client.get(&request.url),
             Method::Post => self.client.post(&request.url),
             Method::Put => self.client.put(&request.url),
+            Method::Delete => self.client.delete(&request.url),
         };
         if let Some(bearer) = &request.bearer {
             builder = builder.bearer_auth(bearer.expose());

@@ -120,6 +120,14 @@ export async function allowDeviceControl(): Promise<SpotifyStatus> {
   });
 }
 
+/** Signs in again, asking Spotify for permission to read and change the account's library. */
+export async function allowLibrary(): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|sign_in', {
+    feature: 'LibrarySaveRemove',
+  });
+}
+
 export async function cancelSpotifySignIn(): Promise<SpotifyStatus> {
   requireDesktop();
   return invoke<SpotifyStatus>('plugin:ora|cancel_sign_in');
@@ -228,6 +236,18 @@ export async function listDevices(): Promise<Device[]> {
 export async function transferPlayback(key: string): Promise<void> {
   requireDesktop();
   return invoke<void>('plugin:ora|transfer_playback', { key });
+}
+
+/** Asks Spotify whether the track playing now is liked; the playback status carries it. */
+export async function refreshLiked(): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>('plugin:ora|refresh_liked');
+}
+
+/** The `+` control. Resolves whether the track playing now is liked afterwards. */
+export async function toggleLiked(): Promise<boolean> {
+  requireDesktop();
+  return invoke<boolean>('plugin:ora|toggle_liked');
 }
 
 export type WindowChrome = 'custom' | 'macos' | 'preview';

@@ -2,16 +2,19 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import App, { REMOTE_REFRESH_MS } from './App';
+import App, { LIKE_MESSAGE_MS, REMOTE_REFRESH_MS } from './App';
 import {
+  allowLibrary,
   enablePlayback,
   getAppInfo,
   getWindowChrome,
   refreshPlayback,
   savePreferences,
   showMainWindow,
+  refreshLiked,
   subscribePlayback,
   subscribeSpotify,
+  toggleLiked,
 } from './native/client';
 import type { AppInfo, SpotifyStatus } from './native/client';
 import type { Feature } from './native/bindings/Feature';
@@ -51,6 +54,9 @@ vi.mock('./native/client', () => ({
   listDevices: vi.fn(),
   transferPlayback: vi.fn(),
   allowDeviceControl: vi.fn(),
+  allowLibrary: vi.fn(),
+  refreshLiked: vi.fn(),
+  toggleLiked: vi.fn(),
 }));
 
 function signedIn(granted: Feature[]): SpotifyStatus {
@@ -75,6 +81,7 @@ beforeEach(() => {
   vi.mocked(savePreferences).mockImplementation(async (value) => value);
   vi.mocked(showMainWindow).mockResolvedValue(undefined);
   vi.mocked(refreshPlayback).mockResolvedValue(undefined);
+  vi.mocked(refreshLiked).mockResolvedValue(undefined);
   vi.mocked(enablePlayback).mockResolvedValue(true);
 });
 
@@ -452,5 +459,99 @@ describe('device control', () => {
     );
     await waitFor(() => expect(enablePlayback).toHaveBeenCalledTimes(1));
     expect(enablePlayback).toHaveBeenCalledWith(0.7);
+  });
+});
+
+describe('Liked Songs', () => {
+  const playing = () =>
+    playbackStatus({
+      tier: 'active',
+      paused: false,
+      durationMs: 180_000,
+      updatedAtMs: Date.now(),
+      nowPlaying: {
+        name: 'Song',
+        artists: ['Artist'],
+        album: 'Album',
+        spotifyUrl: 'https://open.spotify.com/track/x',
+        imageUrl: null,
+        liked: null,
+      },
+    });
+  const playbackOnly = ['SignIn', 'EmbeddedPlayback'] as Feature[];
+
+  it('asks for library access on the first +, then adds the track and says so', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) =>
+        onStatus(signedIn(playbackOnly)),
+      );
+      vi.mocked(subscribePlayback).mockImplementationOnce(async (onStatus) =>
+        onStatus(playing()),
+      );
+      vi.mocked(allowLibrary).mockResolvedValue(
+        signedIn([...playbackOnly, 'LibrarySaveRemove']),
+      );
+      vi.mocked(toggleLiked).mockResolvedValue(true);
+      render(<App />);
+      const add = await screen.findByRole('button', {
+        name: 'Add to Liked Songs',
+      });
+      // Without the permission, nothing about the library is read.
+      expect(refreshLiked).not.toHaveBeenCalled();
+      await userEvent
+        .setup({ advanceTimers: vi.advanceTimersByTime })
+        .click(add);
+      expect(await screen.findByText('Added to Liked Songs')).toBeVisible();
+      expect(allowLibrary).toHaveBeenCalledTimes(1);
+      expect(toggleLiked).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        vi.advanceTimersByTime(LIKE_MESSAGE_MS);
+      });
+      expect(
+        screen.queryByText('Added to Liked Songs'),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText(/Shuffle: Off · Repeat: Off/)).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does nothing more when the permission is declined', async () => {
+    vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) =>
+      onStatus(signedIn(playbackOnly)),
+    );
+    vi.mocked(subscribePlayback).mockImplementationOnce(async (onStatus) =>
+      onStatus(playing()),
+    );
+    vi.mocked(allowLibrary).mockResolvedValue(signedIn(playbackOnly));
+    render(<App />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Add to Liked Songs' }),
+    );
+    await waitFor(() => expect(allowLibrary).toHaveBeenCalledTimes(1));
+    expect(toggleLiked).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('checks each track once, and again on focus', async () => {
+    vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) =>
+      onStatus(signedIn([...playbackOnly, 'LibrarySaveRemove'])),
+    );
+    vi.mocked(subscribePlayback).mockImplementationOnce(async (onStatus) =>
+      onStatus(playing()),
+    );
+    vi.mocked(toggleLiked).mockResolvedValue(false);
+    render(<App />);
+    await waitFor(() => expect(refreshLiked).toHaveBeenCalledTimes(1));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(refreshLiked).toHaveBeenCalledTimes(2);
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Add to Liked Songs' }),
+    );
+    expect(await screen.findByText('Removed from Liked Songs')).toBeVisible();
+    expect(allowLibrary).not.toHaveBeenCalled();
   });
 });

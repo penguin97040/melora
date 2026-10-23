@@ -22,24 +22,31 @@ function live(extra: Partial<PlaybackStatus> = {}): PlaybackStatus {
       album: 'Album',
       spotifyUrl: 'https://open.spotify.com/track/x',
       imageUrl: 'https://i.scdn.co/image/album',
+      liked: null,
     },
     ...extra,
   });
 }
 
-function renderPlayer(playback: PlaybackStatus | null) {
+function renderPlayer(
+  playback: PlaybackStatus | null,
+  likeMessage: string | null = null,
+) {
   const onCommand = vi.fn();
+  const onToggleLike = vi.fn();
   const onOpenInSpotify = vi.fn();
   render(
     <Player
       track={track}
       playback={playback}
       devicePicker={slot}
+      likeMessage={likeMessage}
       onCommand={onCommand}
+      onToggleLike={onToggleLike}
       onOpenInSpotify={onOpenInSpotify}
     />,
   );
-  return { onCommand, onOpenInSpotify };
+  return { onCommand, onToggleLike, onOpenInSpotify };
 }
 
 describe('player panel', () => {
@@ -54,11 +61,20 @@ describe('player panel', () => {
           track={track}
           playback={playback}
           devicePicker={slot}
+          likeMessage={null}
           onCommand={vi.fn()}
+          onToggleLike={vi.fn()}
           onOpenInSpotify={vi.fn()}
         />,
       );
       expect(screen.getByLabelText('Player preview')).toBeInTheDocument();
+      // Synthetic content carries no Spotify brand and no + control.
+      expect(
+        screen.queryByRole('img', { name: 'Spotify' }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /Liked Songs/ }),
+      ).not.toBeInTheDocument();
       expect(screen.getByTestId('device-slot')).toBeInTheDocument();
       expect(screen.getByText(track.title)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
@@ -84,6 +100,59 @@ describe('player panel', () => {
     expect(onOpenInSpotify).toHaveBeenCalledWith(
       'https://open.spotify.com/track/x',
     );
+  });
+
+  it('attributes the item with the official Spotify logo, not over the artwork', () => {
+    renderPlayer(live());
+    const logo = screen.getByRole('img', { name: 'Spotify' });
+    expect(logo).toHaveClass('spotify-logo');
+    expect(logo.getAttribute('src')).toMatch(/Full_Logo_White_RGB/);
+    expect(logo.closest('.panel-label')).not.toBeNull();
+    expect(logo.closest('.player-artwork')).toBeNull();
+  });
+
+  it('puts the + at the end of the title line and shows its state', async () => {
+    const { onToggleLike } = renderPlayer(live());
+    const add = screen.getByRole('button', { name: 'Add to Liked Songs' });
+    expect(add.closest('.title-row')).toContainElement(
+      screen.getByRole('heading', { name: 'Song' }),
+    );
+    expect(add.querySelector('img')?.getAttribute('src')).toMatch(
+      /like-icon-like\b/,
+    );
+    await userEvent.click(add);
+    expect(onToggleLike).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a liked track as liked, and Spotify’s message in the mode line', () => {
+    const playback = live();
+    renderPlayer(
+      { ...playback, nowPlaying: { ...playback.nowPlaying!, liked: true } },
+      'Added to Liked Songs',
+    );
+    const remove = screen.getByRole('button', {
+      name: 'Remove from Liked Songs',
+    });
+    expect(remove.querySelector('img')?.getAttribute('src')).toMatch(
+      /like-icon-liked/,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Added to Liked Songs',
+    );
+  });
+
+  it('has no + for an episode', () => {
+    const playback = live();
+    renderPlayer({
+      ...playback,
+      nowPlaying: {
+        ...playback.nowPlaying!,
+        spotifyUrl: 'https://open.spotify.com/episode/x',
+      },
+    });
+    expect(
+      screen.queryByRole('button', { name: /Liked Songs/ }),
+    ).not.toBeInTheDocument();
   });
 
   it('sends each control to Rust and reflects the real modes', async () => {
@@ -202,6 +271,7 @@ describe('player panel', () => {
           album: '',
           spotifyUrl: null,
           imageUrl: null,
+          liked: null,
         },
       }),
     );

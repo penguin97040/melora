@@ -8,4 +8,9 @@ spotifyUrl: string | null,
 /**
  * Album artwork, only from the image host clients allow in their CSP.
  */
-imageUrl: string | null, };
+imageUrl: string | null, 
+/**
+ * Whether the track is in the account's Liked Songs: `None` until checked, and always for
+ * episodes. Spotify's answer is only held for the current item, never stored.
+ */
+liked: boolean | null, };

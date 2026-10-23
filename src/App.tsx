@@ -8,9 +8,12 @@ import { accountName, profileRetryable } from './features/account';
 import {
   deviceControlAllowed,
   isRemote,
+  libraryAllowed,
+  likeable,
   playbackAllowed,
 } from './features/playback';
 import {
+  allowLibrary,
   defaultPreferences,
   enablePlayback,
   getAppInfo,
@@ -18,12 +21,14 @@ import {
   hasNativeStorage,
   loadSpotifyProfile,
   openInSpotify,
+  refreshLiked,
   refreshPlayback,
   savePreferences,
   sendPlaybackCommand,
   showMainWindow,
   subscribePlayback,
   subscribeSpotify,
+  toggleLiked,
 } from './native/client';
 import type {
   AppInfo,
@@ -55,6 +60,8 @@ const initialTrack = previewTracks[0]!;
 export const REMOTE_REFRESH_MS = 30_000;
 /** A remote track change shows this long after the track should have ended. */
 const TRACK_END_GRACE_MS = 1_500;
+/** How long "Added to Liked Songs" replaces the player's mode line. */
+export const LIKE_MESSAGE_MS = 3_000;
 
 /** Background reads: a failure here shows nothing and the next trigger tries again. */
 function quietly(action: () => Promise<unknown>): void {
@@ -82,6 +89,7 @@ export default function App() {
   const [preferencesSettled, setPreferencesSettled] = useState(false);
   const [spotify, setSpotify] = useState<SpotifyStatus | null>(null);
   const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
+  const [likeMessage, setLikeMessage] = useState<string | null>(null);
   // Keyed to the URL, so a new profile or account gets a fresh attempt.
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const revealRequested = useRef(false);
@@ -256,6 +264,43 @@ export default function App() {
     );
     return () => window.clearTimeout(timer);
   }, [remotePlaying, positionMs, durationMs, updatedAtMs]);
+
+  const mayLike = libraryAllowed(spotify);
+  const nowUrl = playback?.nowPlaying?.spotifyUrl ?? null;
+  const likedKnown = playback?.nowPlaying?.liked != null;
+  useEffect(() => {
+    // Whether a track is liked is asked once per track, and again on focus in case it was
+    // changed in Spotify meanwhile. Rust keeps the answer only while that track plays.
+    if (!mayLike || !likeable(nowUrl)) return;
+    if (!likedKnown) quietly(refreshLiked);
+    const recheck = () => quietly(refreshLiked);
+    window.addEventListener('focus', recheck);
+    return () => window.removeEventListener('focus', recheck);
+  }, [mayLike, nowUrl, likedKnown]);
+
+  useEffect(() => {
+    if (likeMessage === null) return;
+    const timer = window.setTimeout(
+      () => setLikeMessage(null),
+      LIKE_MESSAGE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [likeMessage]);
+
+  /** The + control. The first use asks Spotify for library access, then carries on. */
+  function toggleLike(): void {
+    void (async () => {
+      try {
+        if (!mayLike && !libraryAllowed(await allowLibrary())) return;
+        const liked = await toggleLiked();
+        setLikeMessage(
+          liked ? 'Added to Liked Songs' : 'Removed from Liked Songs',
+        );
+      } catch (error) {
+        setWindowMessage(describeFailure(error));
+      }
+    })();
+  }
 
   function playerCommand(command: PlayerCommand): void {
     void sendPlaybackCommand(command).catch((error: unknown) =>
@@ -567,7 +612,9 @@ export default function App() {
               onOpenSettings={() => setView('Settings')}
             />
           }
+          likeMessage={likeMessage}
           onCommand={playerCommand}
+          onToggleLike={toggleLike}
           onOpenInSpotify={openSpotifyPage}
         />
       </div>

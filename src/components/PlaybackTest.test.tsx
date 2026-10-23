@@ -113,6 +113,7 @@ describe('Playback in Melora (test)', () => {
             album: 'Album',
             spotifyUrl: 'https://open.spotify.com/track/x',
             imageUrl: null,
+            liked: null,
           },
         })}
         volume={70}

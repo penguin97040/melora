@@ -3,8 +3,13 @@ import type { ReactNode } from 'react';
 import type { PreviewTrack } from '../preview';
 import type { PlaybackStatus, PlayerCommand } from '../native/client';
 import type { RepeatMode } from '../native/bindings/RepeatMode';
-import { formatTime, isLive, isRemote } from '../features/playback';
+import { formatTime, isLive, isRemote, likeable } from '../features/playback';
 import { usePlaybackPosition } from '../features/usePlaybackPosition';
+// Spotify's own assets, shipped as the original files (never inlined, which rewrites the SVG
+// text). Design Guidelines; see THIRD_PARTY_NOTICES.md.
+import spotifyLogo from '../assets/brand/Full_Logo_White_RGB.svg?no-inline';
+import likeIcon from '../assets/brand/like-icon-like.svg?no-inline';
+import likedIcon from '../assets/brand/like-icon-liked.svg?no-inline';
 import {
   NextIcon,
   PauseIcon,
@@ -33,46 +38,41 @@ const restrictedAll = {
   seek: true,
 };
 
+type LiveProps = {
+  playback: PlaybackStatus;
+  /** The Playback device line, in the slot the approved layout reserves for it. */
+  devicePicker: ReactNode;
+  /** Spotify's "Added to Liked Songs" or "Removed from Liked Songs", shown for a moment. */
+  likeMessage: string | null;
+  onCommand: (command: PlayerCommand) => void;
+  onToggleLike: () => void;
+  onOpenInSpotify: (url: string) => void;
+};
+
 export function Player({
   track,
   playback,
-  devicePicker,
-  onCommand,
-  onOpenInSpotify,
-}: {
+  ...live
+}: Omit<LiveProps, 'playback'> & {
   track: PreviewTrack;
   playback: PlaybackStatus | null;
-  /** The Playback device line, in the slot the approved layout reserves for it. */
-  devicePicker: ReactNode;
-  onCommand: (command: PlayerCommand) => void;
-  onOpenInSpotify: (url: string) => void;
 }) {
   // While a Spotify device is active (Melora itself or another one), the panel shows the
   // real item and controls. Otherwise it stays the labelled synthetic preview.
   if (playback && isLive(playback)) {
-    return (
-      <LivePlayer
-        playback={playback}
-        devicePicker={devicePicker}
-        onCommand={onCommand}
-        onOpenInSpotify={onOpenInSpotify}
-      />
-    );
+    return <LivePlayer playback={playback} {...live} />;
   }
-  return <PreviewPlayer track={track} devicePicker={devicePicker} />;
+  return <PreviewPlayer track={track} devicePicker={live.devicePicker} />;
 }
 
 function LivePlayer({
   playback,
   devicePicker,
+  likeMessage,
   onCommand,
+  onToggleLike,
   onOpenInSpotify,
-}: {
-  playback: PlaybackStatus;
-  devicePicker: ReactNode;
-  onCommand: (command: PlayerCommand) => void;
-  onOpenInSpotify: (url: string) => void;
-}) {
+}: LiveProps) {
   const position = usePlaybackPosition(playback);
   // The slider's value while it's being dragged; the seek is sent on release only.
   const [dragging, setDragging] = useState<number | null>(null);
@@ -88,6 +88,7 @@ function LivePlayer({
   const shown = dragging ?? position;
   const playDisabled = paused ? disallows.resume : disallows.pause;
   const spotifyUrl = nowPlaying?.spotifyUrl;
+  const liked = nowPlaying?.liked === true;
 
   function commitSeek(): void {
     if (dragging === null) return;
@@ -97,9 +98,9 @@ function LivePlayer({
 
   return (
     <aside className="player panel" aria-label="Player">
-      <div className="panel-label">
+      <div className="panel-label brand-label">
         <span>Now playing</span>
-        <span>Spotify</span>
+        <img className="spotify-logo" src={spotifyLogo} alt="Spotify" />
       </div>
       <div className="player-artwork">
         {nowPlaying?.imageUrl ? (
@@ -122,7 +123,20 @@ function LivePlayer({
         <p className="eyebrow">
           {paused ? 'Paused' : 'Playing'} {place}
         </p>
-        <h2 className="track-title">{nowPlaying?.name ?? 'Spotify'}</h2>
+        <div className="title-row">
+          <h2 className="track-title">{nowPlaying?.name ?? 'Spotify'}</h2>
+          {likeable(spotifyUrl) && (
+            <button
+              className="like-button"
+              aria-label={
+                liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'
+              }
+              onClick={onToggleLike}
+            >
+              <img src={liked ? likedIcon : likeIcon} alt="" />
+            </button>
+          )}
+        </div>
         <p className="artist-name">{nowPlaying?.artists.join(', ')}</p>
         <p className="muted">{nowPlaying?.album}</p>
         <div className="playback-notice">
@@ -207,7 +221,8 @@ function LivePlayer({
           </button>
         </div>
         <p className="mode-status" role="status">
-          Shuffle: {playback.shuffle ? 'On' : 'Off'} · Repeat: {repeat}
+          {likeMessage ??
+            `Shuffle: ${playback.shuffle ? 'On' : 'Off'} · Repeat: ${repeat}`}
         </p>
         {devicePicker}
         <p className="player-footnote">

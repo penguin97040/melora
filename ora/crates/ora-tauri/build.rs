@@ -17,6 +17,8 @@ const COMMANDS: &[&str] = &[
     "refresh_playback",
     "list_devices",
     "transfer_playback",
+    "refresh_liked",
+    "toggle_liked",
 ];
 
 fn main() {

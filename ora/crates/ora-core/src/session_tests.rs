@@ -1119,6 +1119,86 @@ async fn device_control_needs_the_permission() {
 }
 
 #[tokio::test]
+async fn the_plus_control_saves_and_removes_the_track_playing_now() {
+    let h = harness("liked-songs", User::Approve);
+    let scopes = format!("{PLAYBACK_SCOPES} user-library-read user-library-modify");
+    h.http
+        .push(200, &tokens_with_scope("acc1", Some("ref1"), &scopes));
+    h.http.push(200, ME);
+    h.ora
+        .sign_in(Some(Feature::LibrarySaveRemove))
+        .await
+        .unwrap();
+    // Nothing plays: nothing to check and nothing to like, without a request.
+    let before = h.http.requests().len();
+    h.ora.refresh_liked().await.unwrap();
+    assert_eq!(
+        h.ora.toggle_liked().await.err(),
+        Some(OraError::NoActiveDevice)
+    );
+    assert_eq!(h.http.requests().len(), before);
+
+    h.http.push(200, REMOTE_STATE);
+    h.ora.refresh_playback().await.unwrap();
+    h.http.push(200, "[false]");
+    h.ora.refresh_liked().await.unwrap();
+    let liked = || h.ora.playback().status().now_playing.unwrap().liked;
+    assert_eq!(liked(), Some(false));
+    h.http.push(200, "");
+    assert_eq!(h.ora.toggle_liked().await, Ok(true));
+    h.http.push(200, "");
+    assert_eq!(h.ora.toggle_liked().await, Ok(false));
+    // A new report of the same track keeps the answer, so it isn't asked for again.
+    h.http.push(200, REMOTE_STATE);
+    h.ora.refresh_playback().await.unwrap();
+    assert_eq!(liked(), Some(false));
+
+    let library = "https://api.spotify.com/v1/me/library";
+    let uri = "uris=spotify%3Atrack%3AAbCd0123456789xyzXYZ01";
+    let shape: Vec<(Method, String)> = h.http.requests()[before..]
+        .iter()
+        .map(|r| (r.method, r.url.clone()))
+        .collect();
+    assert_eq!(
+        shape[1..4],
+        [
+            (Method::Get, format!("{library}/contains?{uri}")),
+            (Method::Put, format!("{library}?{uri}")),
+            (Method::Delete, format!("{library}?{uri}")),
+        ]
+    );
+
+    // Episodes have no + in Melora yet: nothing is checked, and liking is refused.
+    h.http.push(
+        200,
+        &REMOTE_STATE.replace("spotify:track:", "spotify:episode:"),
+    );
+    h.ora.refresh_playback().await.unwrap();
+    let before = h.http.requests().len();
+    h.ora.refresh_liked().await.unwrap();
+    assert_eq!(
+        h.ora.toggle_liked().await.err(),
+        Some(OraError::Unsupported)
+    );
+    assert_eq!(h.http.requests().len(), before);
+    assert_eq!(liked(), None);
+}
+
+#[tokio::test]
+async fn liking_needs_the_library_permission() {
+    let h = playback_ready("liked-scope").await;
+    h.http.push(200, REMOTE_STATE);
+    h.ora.refresh_playback().await.unwrap();
+    let before = h.http.requests().len();
+    let needs = Some(OraError::NeedsScope {
+        feature: Feature::LibrarySaveRemove,
+    });
+    assert_eq!(h.ora.refresh_liked().await.err(), needs);
+    assert_eq!(h.ora.toggle_liked().await.err(), needs);
+    assert_eq!(h.http.requests().len(), before);
+}
+
+#[tokio::test]
 async fn shuffle_and_repeat_run_through_the_web_api_and_the_rest_go_to_the_sdk() {
     let h = playback_ready("player-command").await;
     let before = h.http.requests().len();

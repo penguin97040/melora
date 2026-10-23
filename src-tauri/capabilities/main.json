@@ -27,6 +27,8 @@
     "ora:allow-refresh-playback",
     "ora:allow-list-devices",
     "ora:allow-transfer-playback",
+    "ora:allow-refresh-liked",
+    "ora:allow-toggle-liked",
     "core:window:allow-minimize",
     "core:window:allow-close",
     "core:window:allow-toggle-maximize",

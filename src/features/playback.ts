@@ -21,6 +21,19 @@ export function deviceControlAllowed(status: SpotifyStatus | null): boolean {
   );
 }
 
+/** The sign-in covers reading and changing the library (the player's + control). */
+export function libraryAllowed(status: SpotifyStatus | null): boolean {
+  return (
+    status?.auth.kind === 'signedIn' &&
+    status.auth.granted.includes('LibrarySaveRemove')
+  );
+}
+
+/** Only tracks get the + for now; Spotify's episode wording isn't settled in Melora. */
+export function likeable(spotifyUrl: string | null | undefined): boolean {
+  return spotifyUrl?.startsWith('https://open.spotify.com/track/') === true;
+}
+
 /** Something is active: Melora itself, or another device Melora controls. */
 export function isLive(status: PlaybackStatus): boolean {
   return status.tier === 'active' || status.device !== null;

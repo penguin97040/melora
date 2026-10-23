@@ -15,7 +15,7 @@ use crate::{
     api::{self, is_allowed_image, ApiDevice, PlayerState},
     browser::Browser,
     http::HttpClient,
-    link::{self, Kind},
+    link::{self, Kind, SpotifyUri},
     secret::Secret,
     store::CredentialStore,
     Ora,
@@ -311,6 +311,27 @@ impl Playback {
         });
     }
 
+    /// The item playing now and whether it's liked, if known.
+    fn current_item(&self) -> Option<(SpotifyUri, Option<bool>)> {
+        let status = self.status.borrow();
+        let now = status.now_playing.as_ref()?;
+        Some((link::parse(now.spotify_url.as_deref()?)?, now.liked))
+    }
+
+    /// Records Spotify's answer for `item`, unless another item is playing by now.
+    fn set_liked(&self, item: &SpotifyUri, liked: bool) {
+        let page = item.page();
+        self.status
+            .send_if_modified(|status| match &mut status.now_playing {
+                Some(now) if now.spotify_url.as_deref() == Some(page.as_str()) => {
+                    let changed = now.liked != Some(liked);
+                    now.liked = Some(liked);
+                    changed
+                }
+                _ => false,
+            });
+    }
+
     /// A UI command for the SDK, validated. Only `Disconnect` works without a ready device.
     pub fn command(&self, command: PlayerCommand) -> Result<PlayerCommand, OraError> {
         if command == PlayerCommand::Disconnect {
@@ -476,6 +497,50 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             .await
     }
 
+    /// Asks Spotify whether the track playing now is in Liked Songs. Episodes aren't checked.
+    pub async fn refresh_liked(&self) -> Result<(), OraError> {
+        self.require(Feature::LibrarySaveRemove)?;
+        let Some((item, _)) = self.playback().current_item() else {
+            return Ok(());
+        };
+        if item.kind != Kind::Track {
+            return Ok(());
+        }
+        let liked = self.library_contains(&item).await?;
+        self.playback().set_liked(&item, liked);
+        Ok(())
+    }
+
+    /// The `+` control: adds the track playing now to Liked Songs, or removes it from there.
+    /// Returns whether it's liked afterwards, for the client's "Added to Liked Songs" message.
+    pub async fn toggle_liked(&self) -> Result<bool, OraError> {
+        self.require(Feature::LibrarySaveRemove)?;
+        let (item, liked) = self
+            .playback()
+            .current_item()
+            .ok_or(OraError::NoActiveDevice)?;
+        if item.kind != Kind::Track {
+            return Err(OraError::Unsupported);
+        }
+        let liked = match liked {
+            Some(liked) => liked,
+            None => self.library_contains(&item).await?,
+        };
+        let (http, item_ref) = (self.http(), &item);
+        self.authorised(
+            |access| async move { api::library_set(http, &access, item_ref, !liked).await },
+        )
+        .await?;
+        self.playback().set_liked(&item, !liked);
+        Ok(!liked)
+    }
+
+    async fn library_contains(&self, item: &SpotifyUri) -> Result<bool, OraError> {
+        let http = self.http();
+        self.authorised(|access| async move { api::library_contains(http, &access, item).await })
+            .await
+    }
+
     /// Starts playback on this app's SDK device: the pasted link when there is one, otherwise
     /// whatever the account was last playing (transferred here).
     pub async fn play_here(&self, link: Option<&str>) -> Result<(), OraError> {
@@ -517,6 +582,7 @@ fn fill(status: &mut PlaybackStatus, state: SdkState) {
     status.shuffle = state.shuffle;
     status.repeat = state.repeat;
     status.disallows = state.disallows;
+    let previous = status.now_playing.take();
     status.now_playing = state.track.and_then(|track| {
         let item = link::parse(&track.uri)?;
         if !matches!(item.kind, Kind::Track | Kind::Episode) {
@@ -536,8 +602,15 @@ fn fill(status: &mut PlaybackStatus, state: SdkState) {
             image_url: track
                 .image_url
                 .filter(|url| url.len() <= 512 && is_allowed_image(url)),
+            liked: None,
         })
     });
+    // Reports repeat while an item plays; Spotify's liked answer holds until the item changes.
+    if let (Some(now), Some(previous)) = (&mut status.now_playing, previous) {
+        if now.spotify_url == previous.spotify_url {
+            now.liked = previous.liked;
+        }
+    }
 }
 
 /// A stable, opaque key for a device ID: it can't be turned back into the ID.
@@ -732,6 +805,25 @@ mod tests {
         let status = playback.status();
         assert_eq!(status.tier, Tier::Ready);
         assert_eq!(status.now_playing, None);
+    }
+
+    #[test]
+    fn the_liked_answer_lasts_while_the_item_plays() {
+        let playback = Playback::default();
+        ready(&playback);
+        playback.apply(state(format!("spotify:track:{}", id()), "Song"));
+        let (item, liked) = playback.current_item().unwrap();
+        assert_eq!(liked, None);
+        playback.set_liked(&item, true);
+        playback.apply(state(format!("spotify:track:{}", id()), "Song"));
+        assert_eq!(playback.status().now_playing.unwrap().liked, Some(true));
+
+        // Another item is unknown again, and a late answer about the old one is ignored.
+        let other: String = id().chars().rev().collect();
+        playback.apply(state(format!("spotify:track:{other}"), "Next"));
+        assert_eq!(playback.status().now_playing.unwrap().liked, None);
+        playback.set_liked(&item, false);
+        assert_eq!(playback.status().now_playing.unwrap().liked, None);
     }
 
     #[test]

@@ -103,7 +103,9 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             playback_command,
             refresh_playback,
             list_devices,
-            transfer_playback
+            transfer_playback,
+            refresh_liked,
+            toggle_liked
         ])
         .setup(move |app, _api| {
             let settings_dir =
@@ -361,6 +363,26 @@ async fn transfer_playback<R: Runtime>(
     ora.0.transfer_playback(&key).await?;
     reconcile(&ora.0);
     Ok(())
+}
+
+/// Reads whether the track playing now is in Liked Songs; the playback status carries it.
+#[tauri::command]
+async fn refresh_liked<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.refresh_liked().await
+}
+
+/// The `+` control. Returns whether the track is liked afterwards.
+#[tauri::command]
+async fn toggle_liked<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+) -> Result<bool, OraError> {
+    main_only(&window)?;
+    ora.0.toggle_liked().await
 }
 
 /// Opens an `https://open.spotify.com/...` page in the system browser. Nothing else.

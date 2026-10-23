@@ -40,7 +40,8 @@ export const featureUi = {
   SavedTracks: phase('Liked Songs', 6),
   SavedAlbums: phase('Saved albums', 6),
   SavedShowsEpisodes: phase('Saved shows and episodes', 6),
-  LibrarySaveRemove: phase('Save to library', 6),
+  // The player's + (Liked Songs) for the track playing now; library views arrive in Phase 6.
+  LibrarySaveRemove: { kind: 'wired', label: 'Save to library' },
   Playlists: phase('Playlists', 6),
   PlaylistDetail: phase('Playlist detail', 6),
   PlaylistEdit: phase('Edit playlists', 6),

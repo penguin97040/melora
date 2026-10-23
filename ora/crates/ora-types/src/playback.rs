@@ -218,6 +218,9 @@ pub struct NowPlaying {
     pub spotify_url: Option<String>,
     /// Album artwork, only from the image host clients allow in their CSP.
     pub image_url: Option<String>,
+    /// Whether the track is in the account's Liked Songs: `None` until checked, and always for
+    /// episodes. Spotify's answer is only held for the current item, never stored.
+    pub liked: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
