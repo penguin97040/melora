@@ -61,6 +61,10 @@ The build disables installers and packages only the release executable, font lic
 
 If Microsoft's SDK download is blocked, report the exact required hostname and widen the host network allowlist only for that host. Do not disable the network policy.
 
+## Versions
+
+Melora is pre-1.0. The middle number is the last finished development phase (0.5 after Phase 5, 0.6 after Phase 6), and the last number counts smaller additions within it (0.5.1 added the podcast skip). 1.0.0 marks the first complete release. The version is set in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `Cargo.lock` and the browser-preview fallback in `src/native/client.ts`; `scripts/tests/test_version.py` fails if they disagree. The `ora` crates keep their own version.
+
 ## Runtime acceptance
 
 - Windows: extract to a writable folder; launch without installation; confirm integrated title controls, displayed version/platform and synthetic preview. Change settings, close and relaunch; inspect neighbouring `data/preferences.json`. Also test an unwritable folder and missing WebView2.

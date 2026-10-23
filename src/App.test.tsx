@@ -73,7 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getWindowChrome).mockResolvedValue('preview');
   vi.mocked(getAppInfo).mockResolvedValue({
-    version: '0.1.0',
+    version: '0.5.1',
     platform: 'windows',
     preferences: { scale: 100, comfortable: false, volume: 70 },
     storageError: null,
@@ -95,7 +95,7 @@ describe('preview shell', () => {
     );
     vi.mocked(showMainWindow).mockImplementation(async () => {
       expect(document.documentElement.style.fontSize).toBe('150%');
-      expect(screen.getByText('v0.1.0 / windows')).toBeInTheDocument();
+      expect(screen.getByText('v0.5.1 / windows')).toBeInTheDocument();
       expect(document.querySelector('.app')).toHaveClass('comfortable');
     });
     render(
@@ -106,7 +106,7 @@ describe('preview shell', () => {
     expect(showMainWindow).not.toHaveBeenCalled();
     await act(async () =>
       resolveInfo({
-        version: '0.1.0',
+        version: '0.5.1',
         platform: 'windows',
         storageError: null,
         preferences: { scale: 150, comfortable: true, volume: 40 },
@@ -127,7 +127,7 @@ describe('preview shell', () => {
       }),
     );
     render(<App />);
-    await screen.findByText('v0.1.0 / windows');
+    await screen.findByText('v0.5.1 / windows');
     expect(showMainWindow).not.toHaveBeenCalled();
     await act(async () => resolveChrome('macos'));
     expect(showMainWindow).toHaveBeenCalledTimes(1);
@@ -179,7 +179,7 @@ describe('preview shell', () => {
 
   it('reports native IPC details and keeps unavailable playback disabled', async () => {
     render(<App />);
-    expect(await screen.findByText('v0.1.0 / windows')).toBeInTheDocument();
+    expect(await screen.findByText('v0.5.1 / windows')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next track' })).toBeDisabled();
     expect(screen.getByText('Synthetic preview')).toBeInTheDocument();
@@ -213,7 +213,7 @@ describe('preview shell', () => {
   it('cycles preview modes by keyboard and retains them across tracks and navigation', async () => {
     const user = userEvent.setup();
     const { unmount } = render(<App />);
-    await screen.findByText('v0.1.0 / windows');
+    await screen.findByText('v0.5.1 / windows');
     const controls = screen.getByRole('group', {
       name: 'Preview player controls',
     });
@@ -308,14 +308,14 @@ describe('preview shell', () => {
   it('restores display settings and reports failed persistence', async () => {
     const user = userEvent.setup();
     vi.mocked(getAppInfo).mockResolvedValue({
-      version: '0.1.0',
+      version: '0.5.1',
       platform: 'windows',
       preferences: { scale: 125, comfortable: true, volume: 40 },
       storageError: null,
     });
     vi.mocked(savePreferences).mockRejectedValue(new Error('fixture failure'));
     render(<App />);
-    await screen.findByText('v0.1.0 / windows');
+    await screen.findByText('v0.5.1 / windows');
     await user.click(screen.getByRole('button', { name: /Settings/ }));
     expect(screen.getByRole('combobox')).toHaveValue('125');
     expect(screen.getByRole('checkbox')).toBeChecked();
@@ -330,7 +330,7 @@ describe('preview shell', () => {
   it('searches all preview tracks after a playlist selection and reports actual artist counts', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText('v0.1.0 / windows');
+    await screen.findByText('v0.5.1 / windows');
     await user.click(
       screen.getByRole('button', { name: /Soft machinery.*Static Gardens/ }),
     );
@@ -361,7 +361,7 @@ describe('preview shell', () => {
         }),
     );
     render(<App />);
-    await screen.findByText('v0.1.0 / windows');
+    await screen.findByText('v0.5.1 / windows');
     await user.click(screen.getByRole('button', { name: /Settings/ }));
     await user.selectOptions(screen.getByRole('combobox'), '125');
     await user.click(screen.getByRole('checkbox'));

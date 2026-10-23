@@ -29,6 +29,7 @@ if not re.fullmatch(r'[1-9][0-9]*x[1-9][0-9]*', args.screen):
     parser.error('Screen must be WIDTHxHEIGHT in physical pixels')
 screen_width, screen_height = map(int, args.screen.split('x'))
 exe = str(Path(args.executable).resolve())
+VERSION = json.loads((Path(__file__).resolve().parents[1] / 'package.json').read_text())['version']
 output = Path('artifacts/runtime')
 output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
@@ -77,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                     return
                 time.sleep(0.1)
             raise AssertionError('Native UI assertion timed out: ' + str(execute("return {errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent), clicks:window.__chromeClicks};")))
-        wait_script("return document.body.innerText.includes('v0.1.0 / linux');")
+        wait_script(f"return document.body.innerText.includes('v{VERSION} / linux');")
         # Exercise the native boundary rather than only mocking frontend wrappers.
         execute("""
             window.__securityReview = null;
@@ -458,7 +459,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         call('DELETE', '')
         session = launch()
         wait_script("return document.documentElement.style.fontSize === '125%';")
-        assert 'v0.1.0 / linux' in execute('return document.body.innerText;')
+        assert f'v{VERSION} / linux' in execute('return document.body.innerText;')
         assert execute("return document.querySelector('.transport button').getAttribute('aria-label') === 'Shuffle: Off (preview)' && document.querySelector('.transport button:last-child').getAttribute('aria-label') === 'Repeat: Off (preview)';"), 'Preview modes persisted after relaunch'
         shot = call('GET', '/screenshot')
         (output / 'melora-linux-restored.png').write_bytes(base64.b64decode(shot))
