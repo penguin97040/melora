@@ -45,6 +45,8 @@ vi.mock('./native/client', () => ({
   allowFeature: vi.fn(),
   allowLibrary: vi.fn(),
   listPlaylists: vi.fn(),
+  getPlaylistOrder: vi.fn(async () => []),
+  setPlaylistOrder: vi.fn(async () => undefined),
   playlistTracks: vi.fn(),
   likedTracks: vi.fn(),
   playFromList: vi.fn(),

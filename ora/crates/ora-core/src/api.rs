@@ -739,32 +739,166 @@ pub async fn my_playlists<H: HttpClient>(
         .items
         .into_iter()
         .flatten()
-        .filter_map(|playlist| {
-            let id = playlist.id.filter(|id| crate::link::is_base62_id(id))?;
-            let owner_id = playlist.owner.as_ref().and_then(|o| o.id.as_deref());
-            let readable = playlist.collaborative || me.is_none() || owner_id == me;
-            Some(PlaylistSummary {
-                spotify_url: format!("https://open.spotify.com/playlist/{id}"),
-                id,
-                name: clip(&playlist.name.unwrap_or_default(), MAX_TEXT),
-                owner: clip(
-                    &playlist
-                        .owner
-                        .and_then(|o| o.display_name)
-                        .unwrap_or_default(),
-                    MAX_TEXT,
-                ),
-                total: playlist.items.or(playlist.tracks).map_or(0, |c| c.total),
-                image_url: pick_image(playlist.images.unwrap_or_default()),
-                readable,
-            })
-        })
+        .filter_map(|playlist| playlist_summary(playlist, me))
         .collect();
     Ok(PlaylistPage {
         items,
         total: body.total,
         next_offset,
     })
+}
+
+fn playlist_summary(playlist: PlaylistBody, me: Option<&str>) -> Option<PlaylistSummary> {
+    let id = playlist.id.filter(|id| crate::link::is_base62_id(id))?;
+    let owner_id = playlist.owner.as_ref().and_then(|o| o.id.as_deref());
+    let readable = playlist.collaborative || me.is_none() || owner_id == me;
+    Some(PlaylistSummary {
+        spotify_url: format!("https://open.spotify.com/playlist/{id}"),
+        id,
+        name: clip(&playlist.name.unwrap_or_default(), MAX_TEXT),
+        owner: clip(
+            &playlist
+                .owner
+                .and_then(|o| o.display_name)
+                .unwrap_or_default(),
+            MAX_TEXT,
+        ),
+        total: playlist.items.or(playlist.tracks).map_or(0, |c| c.total),
+        image_url: pick_image(playlist.images.unwrap_or_default()),
+        readable,
+    })
+}
+
+/// Spotify's limit for adding to or removing from a playlist in one request.
+pub const PLAYLIST_BATCH: usize = 100;
+
+/// Playlist changes: 403 means the account neither owns nor collaborates on it.
+async fn playlist_send<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    method: Method,
+    url: String,
+    body: serde_json::Value,
+    forbidden: ForbiddenHint,
+) -> Result<Response, ApiError> {
+    let response = http
+        .send(Request {
+            method,
+            url,
+            bearer: Some(access.clone()),
+            form: Vec::new(),
+            json: Some(body),
+        })
+        .await
+        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    if matches!(response.status, 200 | 201) {
+        Ok(response)
+    } else {
+        Err(error_for(&response, forbidden))
+    }
+}
+
+/// `POST /me/playlists` with `{"name", "public": false}`: a new private playlist, listed like
+/// the others.
+pub async fn create_playlist<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    name: &str,
+    me: Option<&str>,
+) -> Result<PlaylistSummary, ApiError> {
+    let body = serde_json::json!({ "name": name, "public": false });
+    let url = format!("{API_BASE}/me/playlists");
+    let response = playlist_send(
+        http,
+        access,
+        Method::Post,
+        url,
+        body,
+        ForbiddenHint::Unknown,
+    )
+    .await?;
+    serde_json::from_slice::<PlaylistBody>(&response.body)
+        .ok()
+        .and_then(|playlist| playlist_summary(playlist, me))
+        .ok_or(ApiError::Other(OraError::Network))
+}
+
+fn playlist_items_url(id: &str) -> String {
+    format!("{API_BASE}/playlists/{}/items", encode(id))
+}
+
+/// `POST /playlists/{id}/items` with up to 100 URIs in the body: added at the end, in order.
+pub async fn add_playlist_items<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    id: &str,
+    items: &[SpotifyUri],
+) -> Result<(), ApiError> {
+    debug_assert!((1..=PLAYLIST_BATCH).contains(&items.len()));
+    let uris: Vec<String> = items.iter().map(SpotifyUri::uri).collect();
+    let body = serde_json::json!({ "uris": uris });
+    playlist_send(
+        http,
+        access,
+        Method::Post,
+        playlist_items_url(id),
+        body,
+        ForbiddenHint::NotOwnerPlaylist,
+    )
+    .await
+    .map(drop)
+}
+
+/// `DELETE /playlists/{id}/items` with up to 100 `{"uri"}` objects. Spotify removes every
+/// occurrence of each URI.
+pub async fn remove_playlist_items<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    id: &str,
+    items: &[SpotifyUri],
+) -> Result<(), ApiError> {
+    debug_assert!((1..=PLAYLIST_BATCH).contains(&items.len()));
+    let objects: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item| serde_json::json!({ "uri": item.uri() }))
+        .collect();
+    let body = serde_json::json!({ "items": objects });
+    playlist_send(
+        http,
+        access,
+        Method::Delete,
+        playlist_items_url(id),
+        body,
+        ForbiddenHint::NotOwnerPlaylist,
+    )
+    .await
+    .map(drop)
+}
+
+/// `PUT /playlists/{id}/items` with `{"range_start", "insert_before", "range_length": 1}`: one
+/// item moves.
+pub async fn move_playlist_item<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    id: &str,
+    range_start: u32,
+    insert_before: u32,
+) -> Result<(), ApiError> {
+    let body = serde_json::json!({
+        "range_start": range_start,
+        "insert_before": insert_before,
+        "range_length": 1,
+    });
+    playlist_send(
+        http,
+        access,
+        Method::Put,
+        playlist_items_url(id),
+        body,
+        ForbiddenHint::NotOwnerPlaylist,
+    )
+    .await
+    .map(drop)
 }
 
 /// `GET /playlists/{id}/items?limit=50&offset=…`. Spotify refuses playlists the account

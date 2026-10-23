@@ -72,7 +72,13 @@ export function Player({
   if (playback && isLive(playback)) {
     return <LivePlayer playback={playback} {...live} />;
   }
-  return <PreviewPlayer track={track} devicePicker={live.devicePicker} />;
+  return (
+    <PreviewPlayer
+      track={track}
+      devicePicker={live.devicePicker}
+      message={live.likeMessage}
+    />
+  );
 }
 
 function LivePlayer({
@@ -280,9 +286,12 @@ function LivePlayer({
 function PreviewPlayer({
   track,
   devicePicker,
+  message,
 }: {
   track: PreviewTrack;
   devicePicker: ReactNode;
+  /** A short confirmation, like "Added to Mine", in place of the mode line. */
+  message: string | null;
 }) {
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<'Off' | 'All' | 'Song'>('Off');
@@ -359,7 +368,7 @@ function PreviewPlayer({
           </button>
         </div>
         <p className="mode-status" role="status">
-          Shuffle: {shuffle ? 'On' : 'Off'} · Repeat: {repeat}
+          {message ?? `Shuffle: ${shuffle ? 'On' : 'Off'} · Repeat: ${repeat}`}
         </p>
         {devicePicker}
         <p className="player-footnote" id="preview-modes-note">

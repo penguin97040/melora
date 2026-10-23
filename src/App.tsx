@@ -2,8 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { DevicePicker } from './components/DevicePicker';
 import { PlaybackTest } from './components/PlaybackTest';
 import { Player } from './components/Player';
-import { QueueMenu } from './components/QueueMenu';
-import type { MenuPoint } from './features/menu';
+import { RowMenu } from './components/RowMenu';
+import type { MenuItem, MenuPoint } from './features/menu';
+import {
+  editable,
+  editFailure,
+  moveIndex,
+  moveRows,
+  orderPlaylists,
+  removeRows,
+  savedOrder,
+  usePlaylistOrder,
+} from './features/editing';
 import { SpotifyAccount } from './components/SpotifyAccount';
 import { SpotifyHome } from './components/SpotifyHome';
 import { SpotifyList } from './components/SpotifyList';
@@ -26,7 +36,7 @@ import {
   useQueue,
   useSavedStates,
 } from './features/library';
-import type { ListSource } from './features/library';
+import type { ListSource, Paged } from './features/library';
 import {
   deviceControlAllowed,
   deviceName,
@@ -44,19 +54,23 @@ import {
 } from './features/search';
 import {
   activatePlayback,
+  addToPlaylist,
   addToQueue,
   allowFeature,
   allowLibrary,
+  createPlaylist,
   defaultPreferences,
   enablePlayback,
   getAppInfo,
   getWindowChrome,
   hasNativeStorage,
   loadSpotifyProfile,
+  moveInPlaylist,
   openInSpotify,
   playFromList,
   refreshLiked,
   refreshPlayback,
+  removeFromPlaylist,
   savePreferences,
   sendPlaybackCommand,
   setSaved,
@@ -70,6 +84,7 @@ import type {
   PlaybackStatus,
   PlayerCommand,
   PlayRequest,
+  PlaylistSummary,
   Preferences,
   CatalogItem,
   SearchKind,
@@ -135,12 +150,26 @@ export default function App() {
   const [spotify, setSpotify] = useState<SpotifyStatus | null>(null);
   const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
   const [likeMessage, setLikeMessage] = useState<string | null>(null);
-  // A row's open context menu ("Add to queue").
+  // A row's open context menu; `id` starts a fresh menu when one replaces another.
   const [menu, setMenu] = useState<{
-    uri: string;
+    id: number;
     name: string;
     at: MenuPoint;
+    items: MenuItem[];
   } | null>(null);
+  // The sidebar's New playlist form, with the song to put in first.
+  const [creating, setCreating] = useState<{
+    adding: { uri: string; name: string } | null;
+    busy: boolean;
+  } | null>(null);
+  const menus = useRef(0);
+  // Playlist changes take turns, so Spotify applies them in the order they were made.
+  const editQueue = useRef<Promise<unknown>>(Promise.resolve());
+  // The latest status, for changes that wait their turn.
+  const latestSpotify = useRef(spotify);
+  useEffect(() => {
+    latestSpotify.current = spotify;
+  }, [spotify]);
   // Keyed to the URL, so a new profile or account gets a fresh attempt.
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const revealRequested = useRef(false);
@@ -345,6 +374,15 @@ export default function App() {
     showPlaylists ? `playlists:${profile?.id ?? ''}` : null,
     fetchPlaylists,
   );
+  // Melora's own order for the sidebar (and Home), kept per account beside Melora's data.
+  const playlistOrder = usePlaylistOrder(
+    showPlaylists ? (profile?.id ?? null) : null,
+    setWindowMessage,
+  );
+  const ordered: Paged<PlaylistSummary> = {
+    ...playlists,
+    items: orderPlaylists(playlists.items, playlistOrder.order),
+  };
   // Signing out, or a sign-in without the permission, goes back to the preview.
   const shown = showPlaylists ? source : null;
   const list = usePaged(
@@ -481,6 +519,208 @@ export default function App() {
     })();
   }
 
+  function showMenu(name: string, at: MenuPoint, items: MenuItem[]): void {
+    menus.current += 1;
+    setMenu({ id: menus.current, name, at, items });
+  }
+
+  /**
+   * A playlist change, after the ones before it. The first asks Spotify for permission to change
+   * playlists. On failure the message says why and `undo` puts the list back.
+   */
+  function editPlaylists(change: () => Promise<void>, undo?: () => void): void {
+    editQueue.current = editQueue.current.then(async () => {
+      try {
+        if (
+          !granted(latestSpotify.current, 'PlaylistEdit') &&
+          !granted(await allowFeature('PlaylistEdit'), 'PlaylistEdit')
+        ) {
+          undo?.();
+          return;
+        }
+        await change();
+      } catch (error) {
+        setWindowMessage(editFailure(error));
+        undo?.();
+      }
+    });
+  }
+
+  /** A playlist's count after `added` items went in (or out, when negative). */
+  function countPlaylist(id: string, added: number): void {
+    playlists.edit((page) => ({
+      ...page,
+      items: page.items.map((item) =>
+        item.id === id
+          ? { ...item, total: Math.max(0, item.total + added) }
+          : item,
+      ),
+    }));
+  }
+
+  /** Moves the shown playlist's row at index `from` to index `to`, here and on Spotify. */
+  function moveTrack(from: number, to: number): void {
+    const a = list.items[from];
+    const b = list.items[to];
+    if (shown?.kind !== 'playlist' || !a || !b || from === to) return;
+    const id = shown.playlist.id;
+    list.edit((page) => ({
+      ...page,
+      items: moveRows(page.items, a.position, b.position),
+    }));
+    editPlaylists(
+      () => moveInPlaylist(id, a.position, b.position),
+      list.reload,
+    );
+  }
+
+  /** Removes every copy of `uri` from the shown playlist. */
+  function removeTrack(uri: string): void {
+    if (shown?.kind !== 'playlist') return;
+    const { id, name } = shown.playlist;
+    const copies = list.items.filter((row) => row.uri === uri).length;
+    list.edit((page) => removeRows(page, uri));
+    countPlaylist(id, -copies);
+    editPlaylists(async () => {
+      await removeFromPlaylist(id, [uri]);
+      setLikeMessage(`Removed from ${name || 'the playlist'}`);
+    }, list.reload);
+  }
+
+  function addTo(target: PlaylistSummary, uri: string): void {
+    const showing =
+      shown?.kind === 'playlist' && shown.playlist.id === target.id;
+    editPlaylists(async () => {
+      await addToPlaylist(target.id, [uri]);
+      countPlaylist(target.id, 1);
+      setLikeMessage(`Added to ${target.name || 'the playlist'}`);
+      if (showing) list.reload();
+    });
+  }
+
+  /**
+   * Creates a private playlist from the sidebar's form (with a song first, if it came from
+   * "Add to playlist…"), puts it first and opens it.
+   */
+  function createNew(name: string): void {
+    const adding = creating?.adding ?? null;
+    const order = playlistOrder.order;
+    setCreating((previous) => previous && { ...previous, busy: true });
+    editPlaylists(
+      async () => {
+        const made = await createPlaylist(name);
+        // Spotify lists a new playlist first, so later pages start one further on.
+        playlists.edit((page) => ({
+          items: [made, ...page.items.filter((item) => item.id !== made.id)],
+          total: page.total + 1,
+          nextOffset: page.nextOffset === null ? null : page.nextOffset + 1,
+        }));
+        if (order.length > 0) playlistOrder.save([made.id, ...order]);
+        setCreating(null);
+        if (adding) {
+          await addToPlaylist(made.id, [adding.uri]);
+          countPlaylist(made.id, 1);
+        }
+        setLikeMessage(
+          adding ? `Added to ${made.name}` : `Created ${made.name}`,
+        );
+        chooseList({
+          kind: 'playlist',
+          playlist: adding ? { ...made, total: 1 } : made,
+        });
+      },
+      () => setCreating((previous) => previous && { ...previous, busy: false }),
+    );
+  }
+
+  /** Moves the sidebar's playlist at `from` to `to` in Melora's own order. */
+  function movePlaylist(from: number, to: number): void {
+    if (to < 0 || to >= ordered.items.length || from === to) return;
+    playlistOrder.save(
+      savedOrder(moveIndex(ordered.items, from, to), playlistOrder.order),
+    );
+  }
+
+  /** A song's or episode's menu, in any list; a playlist's own rows can also move and go. */
+  function openTrackMenu(
+    uri: string,
+    name: string,
+    at: MenuPoint,
+    index: number | null = null,
+  ): void {
+    const items: MenuItem[] = [
+      { label: 'Add to queue', onSelect: () => queueItem(uri) },
+    ];
+    if (showPlaylists)
+      items.push({
+        label: 'Add to playlist…',
+        opensMenu: true,
+        onSelect: () => openPlaylistPicker(uri, name, at),
+      });
+    if (
+      index !== null &&
+      shown?.kind === 'playlist' &&
+      editable(shown.playlist)
+    )
+      items.push(
+        {
+          label: 'Move up',
+          disabled: index === 0,
+          onSelect: () => moveTrack(index, index - 1),
+        },
+        {
+          label: 'Move down',
+          disabled: index === list.items.length - 1,
+          onSelect: () => moveTrack(index, index + 1),
+        },
+        {
+          label: 'Remove from this playlist',
+          onSelect: () => removeTrack(uri),
+        },
+      );
+    showMenu(name, at, items);
+  }
+
+  /** "Add to playlist…": a new playlist, or one the account can change. */
+  function openPlaylistPicker(uri: string, name: string, at: MenuPoint): void {
+    showMenu(name, at, [
+      {
+        label: 'New playlist…',
+        onSelect: () => setCreating({ adding: { uri, name }, busy: false }),
+      },
+      ...ordered.items.filter(editable).map((target) => ({
+        label: target.name || 'Untitled playlist',
+        onSelect: () => addTo(target, uri),
+      })),
+    ]);
+  }
+
+  /** A sidebar playlist's menu: moving it in Melora's order, or going back to Spotify's. */
+  function openPlaylistMenu(
+    item: PlaylistSummary,
+    index: number,
+    at: MenuPoint,
+  ): void {
+    const items: MenuItem[] = [
+      {
+        label: 'Move up',
+        disabled: index === 0,
+        onSelect: () => movePlaylist(index, index - 1),
+      },
+      {
+        label: 'Move down',
+        disabled: index === ordered.items.length - 1,
+        onSelect: () => movePlaylist(index, index + 1),
+      },
+    ];
+    if (playlistOrder.order.length > 0)
+      items.push({
+        label: 'Use Spotify’s order',
+        onSelect: () => playlistOrder.save([]),
+      });
+    showMenu(item.name || 'Untitled playlist', at, items);
+  }
+
   /** The + control. The first use asks Spotify for library access, then carries on. */
   function toggleLike(): void {
     void (async () => {
@@ -600,9 +840,22 @@ export default function App() {
           </nav>
           {showPlaylists ? (
             <SpotifyPlaylists
-              playlists={playlists}
+              playlists={ordered}
               selected={shown ? sourceKey(shown) : null}
               onSelect={chooseList}
+              ordered={playlistOrder.order.length > 0}
+              onMove={movePlaylist}
+              onUseSpotifyOrder={() => playlistOrder.save([])}
+              onMenu={openPlaylistMenu}
+              creating={
+                creating && {
+                  adding: creating.adding?.name ?? null,
+                  busy: creating.busy,
+                }
+              }
+              onStartCreate={() => setCreating({ adding: null, busy: false })}
+              onCreate={createNew}
+              onCancelCreate={() => setCreating(null)}
             />
           ) : (
             <section className="playlists" aria-label="Preview playlists">
@@ -741,7 +994,7 @@ export default function App() {
             <SpotifyHome
               spotify={spotify}
               playback={playback}
-              playlists={showPlaylists ? playlists : null}
+              playlists={showPlaylists ? ordered : null}
               playingUrl={nowUrl}
               onOpen={chooseList}
               onOpenItem={openItem}
@@ -749,7 +1002,7 @@ export default function App() {
                 playFrom(playRequestFor({ kind: 'recent' }, rows, row))
               }
               onMenu={(row, at) =>
-                row.uri && setMenu({ uri: row.uri, name: row.name, at })
+                row.uri && openTrackMenu(row.uri, row.name, at)
               }
               onAllow={allow}
               onOpenSettings={() => setView('Settings')}
@@ -765,9 +1018,7 @@ export default function App() {
               more={more}
               playingUrl={nowUrl}
               onPlay={playResult}
-              onMenu={(item, at) =>
-                setMenu({ uri: item.uri, name: item.name, at })
-              }
+              onMenu={(item, at) => openTrackMenu(item.uri, item.name, at)}
             />
           ) : spotifyList && shown?.kind === 'queue' ? (
             <SpotifyQueue
@@ -792,8 +1043,11 @@ export default function App() {
               saved={saved.known}
               onSave={saveItem}
               onMenu={(row, at) =>
-                row.uri && setMenu({ uri: row.uri, name: row.name, at })
+                row.uri &&
+                openTrackMenu(row.uri, row.name, at, list.items.indexOf(row))
               }
+              editable={shown.kind === 'playlist' && editable(shown.playlist)}
+              onMove={moveTrack}
               onPlay={playRow}
               onPlayAll={() =>
                 shown.kind === 'playlist' &&
@@ -975,10 +1229,11 @@ export default function App() {
         </span>
       </footer>
       {menu && (
-        <QueueMenu
+        <RowMenu
+          key={menu.id}
           name={menu.name}
           at={menu.at}
-          onAdd={() => queueItem(menu.uri)}
+          items={menu.items}
           onClose={() => setMenu(null)}
         />
       )}

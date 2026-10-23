@@ -1,5 +1,7 @@
+import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { describeFailure, isOraError } from '../features/account';
+import { moveKey } from '../features/editing';
 import {
   countLabel,
   isEpisodeList,
@@ -8,6 +10,7 @@ import {
   useWindow,
 } from '../features/library';
 import type { Paged, TrackSource } from '../features/library';
+import { useDragReorder } from '../features/reorder';
 import { releaseDate } from '../features/search';
 import type { TrackRow } from '../native/client';
 import type { Feature } from '../native/bindings/Feature';
@@ -28,8 +31,12 @@ type Props = {
   onAllow: (feature: Feature) => void;
   /** Saves `uri` (a track, album or show) or removes it, `saved` being its state now. */
   onSave: (uri: string, saved: boolean) => void;
-  /** A row's context menu (right-click, the Menu key or Shift+F10), for "Add to queue". */
+  /** A row's context menu (right-click, the Menu key or Shift+F10): queue, playlists, moving. */
   onMenu: (row: TrackRow, at: MenuPoint) => void;
+  /** A playlist the account can change: its rows move by dragging or Alt+↑/↓. */
+  editable: boolean;
+  /** Moves the row at index `from` of the loaded rows to index `to`. */
+  onMove: (from: number, to: number) => void;
 };
 
 type Heading = {
@@ -194,6 +201,8 @@ export function SpotifyList({
   onAllow,
   onSave,
   onMenu,
+  editable,
+  onMove,
 }: Props) {
   const heading = headingFor(source);
   const playlist = source.kind === 'playlist' ? source.playlist : null;
@@ -203,7 +212,11 @@ export function SpotifyList({
     list.error.kind === 'forbidden' &&
     list.error.hint === 'NotOwnerPlaylist';
   const limited = playlist !== null && (!playlist.readable || refused);
-  const total = playlist ? playlist.total : list.total;
+  // A playlist's own rows count edits made here; until they load, the sidebar's count shows.
+  const total =
+    playlist && (limited || (list.loading && list.items.length === 0))
+      ? playlist.total
+      : list.total;
   const albumName = source.kind === 'album' ? source.album.name : '';
   // Liked Songs are saved until shown otherwise.
   const isSaved = (uri: string) =>
@@ -214,6 +227,24 @@ export function SpotifyList({
   const [body, rows] = useWindow(list.items.length);
   const shown = list.items.slice(rows.start, rows.end);
   const container = heading.container;
+  const canMove = editable && !limited;
+  const reorder = useDragReorder(body, onMove);
+  // After Alt+↑/↓, focus follows the row to its new place once it has moved.
+  const follow = useRef<number | null>(null);
+  useEffect(() => {
+    const index = follow.current;
+    if (index === null) return;
+    follow.current = null;
+    body.current
+      ?.querySelector<HTMLElement>(`[data-reorder="${index}"] .track-select`)
+      ?.focus();
+  }, [list.items, body]);
+
+  function move(from: number, to: number): void {
+    if (to < 0 || to >= list.items.length) return;
+    follow.current = to;
+    onMove(from, to);
+  }
 
   return (
     <>
@@ -222,6 +253,7 @@ export function SpotifyList({
         <h1>{heading.title}</h1>
         <p className="intro">
           {heading.intro} {limited ? '' : 'Select a title to play it.'}
+          {canMove && ' Drag a song, or press Alt+↑ or Alt+↓, to move it.'}
         </p>
         <div className="collection-meta">
           <span>{countLabel(total, heading.noun)}</span>
@@ -279,9 +311,13 @@ export function SpotifyList({
                   <th scope="col">Time</th>
                 </tr>
               </thead>
-              <tbody ref={body}>
+              <tbody
+                ref={body}
+                className={reorder.drag ? 'reordering' : undefined}
+              >
                 <Spacer rows={rows.start} height={rows.rowHeight} />
-                {shown.map((row) => {
+                {shown.map((row, k) => {
+                  const index = rows.start + k;
                   const playing =
                     row.spotifyUrl !== null && row.spotifyUrl === playingUrl;
                   const track = row.uri?.startsWith('spotify:track:')
@@ -290,7 +326,11 @@ export function SpotifyList({
                   return (
                     <tr
                       key={row.position}
-                      className={playing ? 'selected-track' : ''}
+                      {...(canMove ? reorder.bind(index) : {})}
+                      className={
+                        `${playing ? 'selected-track' : ''} ${canMove ? reorder.classFor(index) : ''}`.trim() ||
+                        undefined
+                      }
                     >
                       <td className="track-number">
                         {String(row.position + 1).padStart(2, '0')}
@@ -305,7 +345,16 @@ export function SpotifyList({
                               ? 'Melora can’t play local files or tracks Spotify no longer has.'
                               : undefined
                           }
+                          aria-keyshortcuts={
+                            canMove ? 'Alt+ArrowUp Alt+ArrowDown' : undefined
+                          }
                           onClick={() => onPlay(row)}
+                          onKeyDown={(event) => {
+                            const step = canMove ? moveKey(event) : null;
+                            if (step === null) return;
+                            event.preventDefault();
+                            move(index, index + step);
+                          }}
                           onContextMenu={(event) => {
                             if (row.uri === null) return;
                             event.preventDefault();

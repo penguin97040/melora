@@ -2256,3 +2256,189 @@ async fn recently_played_lists_the_latest_tracks_and_needs_its_permission() {
         ["https://api.spotify.com/v1/me/player/recently-played?limit=50"]
     );
 }
+
+/// Signed in as `library_ready`, with permission to change playlists too.
+async fn editing_ready(label: &str) -> Harness {
+    let h = library_ready(label).await;
+    let scopes = format!(
+        "{PLAYBACK_SCOPES} {LIBRARY_SCOPES} playlist-modify-public playlist-modify-private"
+    );
+    h.http
+        .push(200, &tokens_with_scope("acc3", Some("ref3"), &scopes));
+    h.http.push(200, ME);
+    h.ora.sign_in(Some(Feature::PlaylistEdit)).await.unwrap();
+    h
+}
+
+const MINE: &str = "PlAyLiSt0123456789abcd";
+
+#[tokio::test]
+async fn new_playlists_are_private_and_named_carefully() {
+    let h = library_ready("create").await;
+    assert_eq!(
+        h.ora.create_playlist("Road trip").await.err(),
+        Some(OraError::NeedsScope {
+            feature: Feature::CreatePlaylist
+        })
+    );
+    let h = editing_ready("create-allowed").await;
+    let before = h.http.requests().len();
+    // Names are trimmed; empty, overlong and control-character names never reach Spotify.
+    for name in ["", "   ", "Tab\tname", &"x".repeat(101)] {
+        assert_eq!(
+            h.ora.create_playlist(name).await.err(),
+            Some(OraError::Unsupported)
+        );
+    }
+    assert_eq!(h.http.requests().len(), before);
+    h.http.push(
+        201,
+        r#"{"id":"NeWpLaYlIsT0123456789a","name":"Road trip","collaborative":false,"public":false,
+        "owner":{"id":"user1","display_name":"Kiri"},"items":{"total":0},"images":[]}"#,
+    );
+    let created = h.ora.create_playlist("  Road trip ").await.unwrap();
+    assert_eq!(
+        (
+            created.id.as_str(),
+            created.name.as_str(),
+            created.total,
+            created.readable
+        ),
+        ("NeWpLaYlIsT0123456789a", "Road trip", 0, true)
+    );
+    let seen = &h.http.requests()[before];
+    assert_eq!(
+        (seen.method, seen.url.as_str()),
+        (Method::Post, "https://api.spotify.com/v1/me/playlists")
+    );
+    assert_eq!(
+        seen.json,
+        Some(serde_json::json!({ "name": "Road trip", "public": false }))
+    );
+}
+
+#[tokio::test]
+async fn playlist_items_are_added_and_removed_in_batches_of_100() {
+    let h = editing_ready("edit-items").await;
+    let before = h.http.requests().len();
+    let uris: Vec<String> = (0..150).map(track_uri).collect();
+    h.http.push(201, r#"{"snapshot_id":"s1"}"#);
+    h.http.push(201, r#"{"snapshot_id":"s2"}"#);
+    h.ora.add_to_playlist(MINE, &uris).await.unwrap();
+    let seen = h.http.requests();
+    let added: Vec<(Method, &str, usize)> = seen[before..]
+        .iter()
+        .map(|r| {
+            let count = r.json.as_ref().unwrap()["uris"].as_array().unwrap().len();
+            (r.method, r.url.as_str(), count)
+        })
+        .collect();
+    let url = "https://api.spotify.com/v1/playlists/PlAyLiSt0123456789abcd/items";
+    assert_eq!(added, [(Method::Post, url, 100), (Method::Post, url, 50)]);
+    assert_eq!(
+        seen[before].json.as_ref().unwrap()["uris"][0],
+        "spotify:track:0000000000000000000000"
+    );
+
+    // Albums aren't playlist items, and bad IDs are refused, both before any request.
+    let count = h.http.requests().len();
+    assert_eq!(
+        h.ora
+            .add_to_playlist(MINE, &["spotify:album:AbCd0123456789xyzXYZ01".into()])
+            .await,
+        Err(OraError::InvalidSpotifyLink)
+    );
+    assert_eq!(
+        h.ora.add_to_playlist("short", &[track_uri(1)]).await,
+        Err(OraError::Unsupported)
+    );
+    assert_eq!(h.http.requests().len(), count);
+
+    // Removing sends each URI once; Spotify removes every copy.
+    h.http.push(200, r#"{"snapshot_id":"s3"}"#);
+    h.ora
+        .remove_from_playlist(MINE, &[track_uri(1), track_uri(2), track_uri(1)])
+        .await
+        .unwrap();
+    let removed = h.http.requests().last().unwrap().clone();
+    assert_eq!(
+        (removed.method, removed.url.as_str()),
+        (Method::Delete, url)
+    );
+    assert_eq!(
+        removed.json,
+        Some(serde_json::json!({ "items": [{ "uri": track_uri(1) }, { "uri": track_uri(2) }] }))
+    );
+
+    // Someone else's playlist is refused by Spotify, and says why.
+    h.http
+        .push(403, r#"{"error":{"status":403,"message":"Forbidden"}}"#);
+    assert_eq!(
+        h.ora.add_to_playlist(MINE, &[track_uri(3)]).await,
+        Err(OraError::Forbidden {
+            hint: ForbiddenHint::NotOwnerPlaylist
+        })
+    );
+}
+
+#[tokio::test]
+async fn moving_an_item_names_where_it_lands_and_forgets_the_cached_rows() {
+    let h = editing_ready("move").await;
+    h.http.push(200, ITEMS);
+    h.ora.playlist_tracks(MINE, 50).await.unwrap();
+    let before = h.http.requests().len();
+    // Down: Spotify inserts before the row after the target. Up: before the target itself.
+    h.http.push(200, r#"{"snapshot_id":"s1"}"#);
+    h.http.push(200, r#"{"snapshot_id":"s2"}"#);
+    h.ora.move_in_playlist(MINE, 2, 5).await.unwrap();
+    h.ora.move_in_playlist(MINE, 5, 2).await.unwrap();
+    // Staying put sends nothing.
+    h.ora.move_in_playlist(MINE, 3, 3).await.unwrap();
+    let moves: Vec<(Method, Option<serde_json::Value>)> = h.http.requests()[before..]
+        .iter()
+        .map(|r| (r.method, r.json.clone()))
+        .collect();
+    assert_eq!(
+        moves,
+        [
+            (
+                Method::Put,
+                Some(
+                    serde_json::json!({ "range_start": 2, "insert_before": 6, "range_length": 1 })
+                )
+            ),
+            (
+                Method::Put,
+                Some(
+                    serde_json::json!({ "range_start": 5, "insert_before": 2, "range_length": 1 })
+                )
+            ),
+        ]
+    );
+    // The playlist's rows are read again after a change.
+    h.http.push(200, ITEMS);
+    h.ora.playlist_tracks(MINE, 50).await.unwrap();
+    assert_eq!(h.http.requests().len(), before + 3);
+}
+
+#[tokio::test]
+async fn melora_keeps_its_own_playlist_order_per_account_without_spotify() {
+    let h = playback_ready("order-scope").await;
+    assert_eq!(
+        h.ora.playlist_order().err(),
+        Some(OraError::NeedsScope {
+            feature: Feature::Playlists
+        })
+    );
+    let h = library_ready("order").await;
+    let before = h.http.requests().len();
+    assert_eq!(h.ora.playlist_order(), Ok(Vec::new()));
+    let order = vec!["OtHeRs0123456789abcdef".to_owned(), MINE.to_owned()];
+    h.ora.set_playlist_order(&order).unwrap();
+    assert_eq!(h.ora.playlist_order(), Ok(order));
+    assert!(h.dir.join("playlist-order.json").is_file());
+    // Going back to Spotify's order forgets it.
+    h.ora.set_playlist_order(&[]).unwrap();
+    assert_eq!(h.ora.playlist_order(), Ok(Vec::new()));
+    assert_eq!(h.http.requests().len(), before);
+}

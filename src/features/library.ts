@@ -129,7 +129,11 @@ export function trackTime(ms: number): string {
     : `${minutes}:${seconds}`;
 }
 
-type Page<T> = { items: T[]; total: number; nextOffset: number | null };
+export type Page<T> = {
+  items: T[];
+  total: number;
+  nextOffset: number | null;
+};
 
 export async function fetchPlaylists(_key: string, offset: number) {
   return listPlaylists(offset);
@@ -297,6 +301,10 @@ export type Paged<T> = Page<T> & {
   error: unknown;
   loadMore: () => void;
   retry: () => void;
+  /** Changes the loaded rows in place, after an edit Spotify has accepted or will. */
+  edit: (change: (page: Page<T>) => Page<T>) => void;
+  /** Loads the list again from its first page, keeping the rows shown until it arrives. */
+  reload: () => void;
 };
 
 /**
@@ -366,6 +374,18 @@ export function usePaged<T>(
     },
     retry: () =>
       setWant((previous) => ({ ...previous, attempt: previous.attempt + 1 })),
+    edit: (change) =>
+      setData((previous) => {
+        if (previous.key !== key) return previous;
+        const { items, total, nextOffset } = change(previous);
+        return { ...previous, items, total, nextOffset };
+      }),
+    reload: () =>
+      setWant((previous) => ({
+        key: previous.key,
+        offset: 0,
+        attempt: previous.attempt + 1,
+      })),
   };
 }
 

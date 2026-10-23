@@ -9,7 +9,8 @@ use ora_core::{
     store::KeyringStore,
     types::{
         CatalogPage, Device, Feature, OraError, PlayRequest, PlaybackStatus, PlayerCommand,
-        PlaylistPage, Profile, QueueView, SdkEvent, SearchKind, SearchResults, Status, TrackPage,
+        PlaylistPage, PlaylistSummary, Profile, QueueView, SdkEvent, SearchKind, SearchResults,
+        Status, TrackPage,
     },
     Options, Ora,
 };
@@ -122,6 +123,12 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             queue,
             add_to_queue,
             recently_played,
+            create_playlist,
+            add_to_playlist,
+            remove_from_playlist,
+            move_in_playlist,
+            playlist_order,
+            set_playlist_order,
             search,
             search_page,
             play
@@ -571,6 +578,75 @@ async fn recently_played<R: Runtime>(
 ) -> Result<TrackPage, OraError> {
     main_only(&window)?;
     ora.0.recently_played().await
+}
+
+/// Creates a private playlist with this name.
+#[tauri::command]
+async fn create_playlist<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    name: String,
+) -> Result<PlaylistSummary, OraError> {
+    main_only(&window)?;
+    ora.0.create_playlist(&name).await
+}
+
+/// Adds tracks and episodes to the end of a playlist the account owns or collaborates on.
+#[tauri::command]
+async fn add_to_playlist<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    id: String,
+    uris: Vec<String>,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.add_to_playlist(&id, &uris).await
+}
+
+/// Removes every copy of these tracks and episodes from a playlist.
+#[tauri::command]
+async fn remove_from_playlist<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    id: String,
+    uris: Vec<String>,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.remove_from_playlist(&id, &uris).await
+}
+
+/// Moves one item of a playlist from position `from` to position `to`.
+#[tauri::command]
+async fn move_in_playlist<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    id: String,
+    from: u32,
+    to: u32,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.move_in_playlist(&id, from, to).await
+}
+
+/// Melora's own order for the account's playlists (IDs); empty means Spotify's.
+#[tauri::command]
+async fn playlist_order<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+) -> Result<Vec<String>, OraError> {
+    main_only(&window)?;
+    ora.0.playlist_order()
+}
+
+/// Saves Melora's own order for the account's playlists; an empty list goes back to Spotify's.
+#[tauri::command]
+async fn set_playlist_order<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    ids: Vec<String>,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.set_playlist_order(&ids)
 }
 
 /// Plays from a list on the active device, or on this app's own. A refresh follows, so a

@@ -11,6 +11,7 @@ pub mod library;
 pub mod link;
 pub mod loopback;
 pub mod oauth;
+pub mod order;
 pub mod pkce;
 pub mod playback;
 pub mod search;

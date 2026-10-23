@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { featureUi } from './registry';
+import type { FeatureUi } from './registry';
 
 describe('feature registry', () => {
   it('covers exactly the features generated from ora-types', () => {
@@ -12,7 +13,8 @@ describe('feature registry', () => {
   });
 
   it('gives every deferred feature a visible reason', () => {
-    for (const ui of Object.values(featureUi)) {
+    // Every feature is wired since Phase 6e; later deferrals are still checked.
+    for (const ui of Object.values(featureUi) as FeatureUi[]) {
       expect(ui.label).not.toBe('');
       if (ui.kind === 'deferred') expect(ui.reason).toMatch(/\S/);
     }

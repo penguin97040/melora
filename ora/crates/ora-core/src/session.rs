@@ -18,6 +18,7 @@ use crate::{
     library::Library,
     loopback::{registered_redirect_uri, Callback, CallbackError},
     oauth::{self, TokenError},
+    order::OrderStore,
     pkce,
     playback::Playback,
     scopes_for,
@@ -86,6 +87,7 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
     store: Arc<S>,
     browser: B,
     config: ConfigStore,
+    order: OrderStore,
     app_name: &'static str,
     sign_in_timeout: Duration,
     callback_port: u16,
@@ -104,6 +106,7 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
 
 impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     pub fn new(http: H, store: S, browser: B, options: Options) -> Self {
+        let order = OrderStore::new(options.settings_dir.clone());
         let config = ConfigStore::new(options.settings_dir, options.client_id_variable);
         let loaded = config.load();
         let inner = Inner {
@@ -124,6 +127,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             store: Arc::new(store),
             browser,
             config,
+            order,
             app_name: options.app_name,
             sign_in_timeout: options.sign_in_timeout,
             callback_port: options.callback_port,
@@ -153,6 +157,10 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 
     pub(crate) fn search_state(&self) -> &Search {
         &self.search
+    }
+
+    pub(crate) fn order_store(&self) -> &OrderStore {
+        &self.order
     }
 
     /// The signed-in account's Spotify ID, once the profile has loaded.

@@ -60,7 +60,7 @@ export const defaultPreferences: Preferences = {
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
     return {
-      version: '0.5.5',
+      version: '0.6.0',
       platform: 'Browser preview',
       preferences: defaultPreferences,
       storageError: null,
@@ -364,6 +364,49 @@ export async function addToQueue(uri: string): Promise<void> {
 export async function recentlyPlayed(): Promise<TrackPage> {
   requireDesktop();
   return invoke<TrackPage>('plugin:ora|recently_played');
+}
+
+/** Creates a private playlist with this name (trimmed, 1–100 characters). */
+export async function createPlaylist(name: string): Promise<PlaylistSummary> {
+  requireDesktop();
+  return invoke<PlaylistSummary>('plugin:ora|create_playlist', { name });
+}
+
+/** Adds tracks and episodes to the end of a playlist the account can change (≤ 500). */
+export async function addToPlaylist(id: string, uris: string[]): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|add_to_playlist', { id, uris });
+}
+
+/** Removes every copy of these tracks and episodes from a playlist. */
+export async function removeFromPlaylist(
+  id: string,
+  uris: string[],
+): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|remove_from_playlist', { id, uris });
+}
+
+/** Moves the item at position `from` of a playlist so it ends up at `to`. */
+export async function moveInPlaylist(
+  id: string,
+  from: number,
+  to: number,
+): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|move_in_playlist', { id, from, to });
+}
+
+/** Melora's own order for the account's playlists (IDs); empty means Spotify's. */
+export async function getPlaylistOrder(): Promise<string[]> {
+  requireDesktop();
+  return invoke<string[]>('plugin:ora|playlist_order');
+}
+
+/** Saves Melora's own playlist order; an empty list goes back to Spotify's. */
+export async function setPlaylistOrder(ids: string[]): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|set_playlist_order', { ids });
 }
 
 /** The first page of each kind of result. A newer search rejects this one with `cancelled`. */

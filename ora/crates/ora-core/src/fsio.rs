@@ -1,5 +1,6 @@
 //! Hardened reads and writes for the small settings files in the app's settings folder
-//! (`spotify.json`, and the app's own preferences). One copy, so a fix reaches every file.
+//! (`spotify.json`, Melora's playlist order and the app's own preferences). One copy, so a fix
+//! reaches every file.
 
 use std::{
     fs::{self, File, OpenOptions},

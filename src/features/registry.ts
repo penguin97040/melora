@@ -6,12 +6,6 @@ export type FeatureUi =
   | { kind: 'wired'; label: string }
   | { kind: 'deferred'; label: string; reason: string };
 
-const phase = (label: string, n: number): FeatureUi => ({
-  kind: 'deferred',
-  label,
-  reason: `Arrives in Phase ${n}`,
-});
-
 export const featureUi = {
   // Settings → Spotify account, the sidebar status and the footer account link.
   SignIn: { kind: 'wired', label: 'Sign in with Spotify' },
@@ -49,8 +43,11 @@ export const featureUi = {
   LibrarySaveRemove: { kind: 'wired', label: 'Save to library' },
   Playlists: { kind: 'wired', label: 'Your playlists' },
   PlaylistDetail: { kind: 'wired', label: 'Playlist tracks' },
-  PlaylistEdit: phase('Edit playlists', 6),
-  CreatePlaylist: phase('Create playlist', 6),
+  // A playlist's rows (drag, Alt+↑/↓ or the row menu to move; the menu to remove) and every
+  // song's "Add to playlist" (Phase 6e).
+  PlaylistEdit: { kind: 'wired', label: 'Edit playlists' },
+  // The sidebar's New playlist (Phase 6e).
+  CreatePlaylist: { kind: 'wired', label: 'Create playlists' },
   // The sidebar's Recently Played and Home's section (Phase 6d).
   RecentlyPlayed: { kind: 'wired', label: 'Recently played' },
 } satisfies Record<Feature, FeatureUi>;

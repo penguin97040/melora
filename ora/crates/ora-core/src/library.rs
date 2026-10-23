@@ -11,6 +11,10 @@
 //!   affects and updates the player's `+` when it's the track playing now.
 //! - The queue is read on demand (kept 2 seconds, so identical reads share one request, and
 //!   forgotten after an addition); recently played is kept 30 seconds.
+//! - Playlists the account owns or collaborates on can be changed: items added (100 per
+//!   request), removed (every copy of a URI, 100 per request) or moved one at a time, and new
+//!   private playlists created. Any change forgets the cached playlists and their items, even
+//!   when a later batch fails.
 
 use crate::{
     api,
@@ -21,7 +25,9 @@ use crate::{
     store::CredentialStore,
     Ora,
 };
-use ora_types::{CatalogPage, Feature, OraError, PlaylistPage, QueueView, TrackPage};
+use ora_types::{
+    CatalogPage, Feature, OraError, PlaylistPage, PlaylistSummary, QueueView, TrackPage,
+};
 use std::{
     collections::HashMap,
     sync::Mutex,
@@ -87,6 +93,12 @@ impl Library {
     /// After something was added to the queue.
     pub(crate) fn forget_queue(&self) {
         self.queue.clear();
+    }
+
+    /// After a playlist was created or changed: the list's counts and its items.
+    fn forget_playlists(&self) {
+        self.playlists.clear();
+        self.items.clear();
     }
 
     fn states(&self) -> std::sync::MutexGuard<'_, SavedStates> {
@@ -171,6 +183,43 @@ fn library_items(uris: &[String]) -> Result<Vec<SpotifyUri>, OraError> {
     Ok(items)
 }
 
+/// Spotify's limit for a playlist's name is undocumented; Melora keeps names to this.
+pub const MAX_NAME: usize = 100;
+
+/// A new playlist's name: trimmed, not empty, no control characters.
+fn playlist_name(name: &str) -> Result<&str, OraError> {
+    let name = name.trim();
+    let count = name.chars().count();
+    if (1..=MAX_NAME).contains(&count) && !name.chars().any(char::is_control) {
+        Ok(name)
+    } else {
+        Err(OraError::Unsupported)
+    }
+}
+
+/// Tracks and episodes, the kinds a playlist holds, in the order given.
+fn playlist_entries(uris: &[String]) -> Result<Vec<SpotifyUri>, OraError> {
+    if uris.is_empty() || uris.len() > MAX_ITEMS {
+        return Err(OraError::Unsupported);
+    }
+    uris.iter()
+        .map(|uri| {
+            link::parse(uri)
+                .filter(|item| matches!(item.kind, Kind::Track | Kind::Episode))
+                .ok_or(OraError::InvalidSpotifyLink)
+        })
+        .collect()
+}
+
+/// Spotify's `insert_before` for moving the item at `from` so it ends up at `to`.
+fn insert_before(from: u32, to: u32) -> u32 {
+    if to > from {
+        to + 1
+    } else {
+        to
+    }
+}
+
 impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     /// One page of the account's playlists, 50 at a time.
     pub async fn playlists(&self, offset: u32) -> Result<PlaylistPage, OraError> {
@@ -202,6 +251,76 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 })
             })
             .await
+    }
+
+    /// Creates a private playlist; it appears first in the account's list.
+    pub async fn create_playlist(&self, name: &str) -> Result<PlaylistSummary, OraError> {
+        self.require(Feature::CreatePlaylist)?;
+        let name = playlist_name(name)?;
+        let me = self.account();
+        let (http, me) = (self.http(), me.as_deref());
+        let result = self
+            .authorised(|access| async move { api::create_playlist(http, &access, name, me).await })
+            .await;
+        self.library().forget_playlists();
+        result
+    }
+
+    /// Adds tracks and episodes to the end of a playlist, in order (duplicates too).
+    pub async fn add_to_playlist(&self, id: &str, uris: &[String]) -> Result<(), OraError> {
+        self.require(Feature::PlaylistEdit)?;
+        let id = catalogue_id(id)?;
+        let items = playlist_entries(uris)?;
+        let http = self.http();
+        for batch in items.chunks(api::PLAYLIST_BATCH) {
+            let result = self
+                .authorised(|access| async move {
+                    api::add_playlist_items(http, &access, id, batch).await
+                })
+                .await;
+            self.library().forget_playlists();
+            result?;
+        }
+        Ok(())
+    }
+
+    /// Removes every copy of these tracks and episodes from a playlist.
+    pub async fn remove_from_playlist(&self, id: &str, uris: &[String]) -> Result<(), OraError> {
+        self.require(Feature::PlaylistEdit)?;
+        let id = catalogue_id(id)?;
+        let mut items = playlist_entries(uris)?;
+        let mut seen = std::collections::HashSet::new();
+        items.retain(|item| seen.insert(item.uri()));
+        let http = self.http();
+        for batch in items.chunks(api::PLAYLIST_BATCH) {
+            let result = self
+                .authorised(|access| async move {
+                    api::remove_playlist_items(http, &access, id, batch).await
+                })
+                .await;
+            self.library().forget_playlists();
+            result?;
+        }
+        Ok(())
+    }
+
+    /// Moves the item at position `from` so it ends up at position `to`.
+    pub async fn move_in_playlist(&self, id: &str, from: u32, to: u32) -> Result<(), OraError> {
+        self.require(Feature::PlaylistEdit)?;
+        let id = catalogue_id(id)?;
+        let (from, to) = (page_offset(from)?, page_offset(to)?);
+        if from == to {
+            return Ok(());
+        }
+        let http = self.http();
+        let before = insert_before(from, to);
+        let result = self
+            .authorised(|access| async move {
+                api::move_playlist_item(http, &access, id, from, before).await
+            })
+            .await;
+        self.library().forget_playlists();
+        result
     }
 
     /// One page of Liked Songs, newest first.
