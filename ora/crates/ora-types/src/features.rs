@@ -1,5 +1,5 @@
-//! The single list of user-facing features. Every client maps each variant to its UI, so adding a
-//! variant here fails each client's build or typecheck until that client handles it.
+//! The single list of user-facing features. Melora's UI maps each variant, so adding a variant
+//! here fails `npm run typecheck` until the UI handles it.
 
 use serde::{Deserialize, Serialize};
 

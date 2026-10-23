@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Keep the shared ora crates portable: ora-core stays free of Tauri, ora-types builds for
-# WebAssembly, and the committed TypeScript bindings match what ora-types generates.
+# Keep the ora crates' boundaries: ora-core stays free of Tauri, and the committed TypeScript
+# bindings match what ora-types generates.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -15,9 +15,6 @@ if grep -Eq '^tauri([-_][A-Za-z0-9_-]+)? v' <<<"$tree"; then
   fail 'ora-core must not depend on tauri.'
 fi
 
-cargo check --locked -q -p ora-types --target wasm32-unknown-unknown ||
-  fail 'ora-types must build for wasm32-unknown-unknown.'
-
 cargo test --locked -q -p ora-types >/dev/null ||
   fail 'ora-types tests failed.'
 # Compare against the index, so freshly regenerated bindings pass once they are staged.
@@ -27,4 +24,4 @@ if ! git diff --quiet -- src/native/bindings ||
   fail 'generated bindings in src/native/bindings are out of date. Stage the regenerated files.'
 fi
 
-echo 'ora boundary check passed: ora-core is Tauri-free, ora-types builds for WASM, bindings are current.'
+echo 'ora boundary check passed: ora-core is Tauri-free, bindings are current.'

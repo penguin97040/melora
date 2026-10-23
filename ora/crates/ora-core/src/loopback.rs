@@ -40,7 +40,7 @@ enum Outcome {
 
 /// The URI to register in the Spotify Dashboard for a configured port. Port 0 means "any free
 /// port", registered without a port as Spotify's docs allow; in practice the Dashboard refuses
-/// that form, so clients configure a fixed port and register it exactly.
+/// that form, so the app configures a fixed port and registers it exactly.
 pub fn registered_redirect_uri(port: u16) -> String {
     if port == 0 {
         "http://127.0.0.1/callback".to_owned()

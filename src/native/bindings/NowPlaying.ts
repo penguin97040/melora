@@ -6,7 +6,7 @@ export type NowPlaying = { name: string, artists: Array<string>, album: string,
  */
 spotifyUrl: string | null, 
 /**
- * Album artwork, only from the image host clients allow in their CSP.
+ * Album artwork, only from the image host the app's CSP allows.
  */
 imageUrl: string | null, 
 /**

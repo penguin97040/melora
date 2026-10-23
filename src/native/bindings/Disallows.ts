@@ -2,6 +2,6 @@
 
 /**
  * The SDK's `disallows`: `true` means Spotify doesn't permit that control right now (for
- * example while an advert plays), so clients disable it.
+ * example while an advert plays), so the UI disables it.
  */
 export type Disallows = { pause: boolean, resume: boolean, next: boolean, previous: boolean, seek: boolean, };

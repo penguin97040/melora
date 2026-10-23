@@ -1,7 +1,7 @@
-//! The `ora` Tauri plugin. It exposes the shared session in `ora-core` to the client's main
+//! The `ora` Tauri plugin. It exposes the session in `ora-core` to the app's main
 //! window as a few narrow commands and status streams. The only token that crosses into
 //! JavaScript is the access token `access_token` hands to the Web Playback SDK's
-//! `getOAuthToken`, through the shared sdk-bridge.
+//! `getOAuthToken`, through the sdk-bridge.
 
 use ora_core::{
     browser::{self, Browser, SystemBrowser},
@@ -54,8 +54,8 @@ impl Bridge {
     }
 }
 
-/// The origin of Spotify's Web Playback SDK script and its playback frame. Clients allow it in
-/// their CSP (`script-src`, `frame-src`) and nowhere else.
+/// The origin of Spotify's Web Playback SDK script and its playback frame. The app allows it in
+/// its CSP (`script-src`, `frame-src`) and nowhere else.
 pub const SDK_ORIGIN: &str = "https://sdk.scdn.co";
 /// The SDK's playback frame. Navigation handlers that also see sub-frames (macOS, Linux) may
 /// allow it while `sdk_frame_allowed` is true.
@@ -68,7 +68,7 @@ pub fn sdk_frame_allowed() -> bool {
     SDK_FRAME_ALLOWED.load(Ordering::SeqCst)
 }
 
-/// What each client supplies when registering the plugin.
+/// What the app supplies when registering the plugin.
 pub struct OraConfig<R: Runtime> {
     /// Credential store service name, for example `app.melora.desktop`.
     pub service: &'static str,
@@ -79,11 +79,11 @@ pub struct OraConfig<R: Runtime> {
     /// Where `spotify.json` lives (beside the executable for Windows portable builds).
     pub settings_dir: fn(&AppHandle<R>) -> Option<PathBuf>,
     /// Fixed loopback port for the sign-in callback. The Spotify Dashboard refuses port-less
-    /// `http://127.0.0.1/callback`, so each client registers `http://127.0.0.1:<port>/callback`.
+    /// `http://127.0.0.1/callback`, so the app registers `http://127.0.0.1:<port>/callback`.
     pub callback_port: u16,
 }
 
-/// The plugin, registered by each client with `.plugin(ora_tauri::init(config))`.
+/// The plugin, registered by the app with `.plugin(ora_tauri::init(config))`.
 pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
     Builder::new("ora")
         .invoke_handler(tauri::generate_handler![

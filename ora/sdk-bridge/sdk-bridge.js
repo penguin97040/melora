@@ -1,4 +1,4 @@
-// Shared Web Playback SDK bridge for every ora client. It checks what the webview supports,
+// Melora's Web Playback SDK bridge. It checks what the webview supports,
 // loads Spotify's SDK only when some DRM system is available, forwards the SDK's events to the
 // `ora` plugin and runs the player commands Rust sends back over a channel.
 //

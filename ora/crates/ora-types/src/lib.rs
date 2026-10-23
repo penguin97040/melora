@@ -1,5 +1,5 @@
-//! Plain data shared by every client and by `ora-core`. Serde only, so it also builds for
-//! `wasm32-unknown-unknown`. TypeScript bindings are generated from these types by `cargo test`.
+//! Plain data shared by the UI and `ora-core`. Serde only. TypeScript bindings are generated from
+//! these types by `cargo test`.
 
 pub mod auth;
 pub mod error;

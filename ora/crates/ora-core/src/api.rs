@@ -12,7 +12,7 @@ use ora_types::{
 use serde::Deserialize;
 
 pub const API_BASE: &str = "https://api.spotify.com/v1";
-/// The only image host a client's CSP allows (`img-src`). Images elsewhere would be blocked, so
+/// The only image host the app's CSP allows (`img-src`). Images elsewhere would be blocked, so
 /// they are dropped here instead of failing silently in the UI.
 pub const IMAGE_HOST: &str = "i.scdn.co";
 

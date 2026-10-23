@@ -1,5 +1,5 @@
-//! Playback: what the shared Web Playback SDK bridge reports, the commands it runs, the
-//! Spotify devices a client can control, and the status every client shows. No tokens or
+//! Playback: what the Web Playback SDK bridge reports, the commands it runs, the Spotify
+//! devices Melora can control, and the status the UI shows. No tokens or
 //! device IDs appear here.
 
 use serde::{Deserialize, Serialize};
@@ -69,7 +69,7 @@ pub enum RepeatMode {
 }
 
 /// The SDK's `disallows`: `true` means Spotify doesn't permit that control right now (for
-/// example while an advert plays), so clients disable it.
+/// example while an advert plays), so the UI disables it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -173,7 +173,7 @@ pub enum Tier {
     Active,
 }
 
-/// Spotify's device `type`, reduced to what a client shows.
+/// Spotify's device `type`, reduced to what the UI shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -216,7 +216,7 @@ pub struct NowPlaying {
     pub album: String,
     /// `https://open.spotify.com/…` for "Open in Spotify".
     pub spotify_url: Option<String>,
-    /// Album artwork, only from the image host clients allow in their CSP.
+    /// Album artwork, only from the image host the app's CSP allows.
     pub image_url: Option<String>,
     /// Whether the track is in the account's Liked Songs: `None` until checked, and always for
     /// episodes. Spotify's answer is only held for the current item, never stored.

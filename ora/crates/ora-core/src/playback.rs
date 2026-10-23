@@ -1,4 +1,4 @@
-//! Playback: embedded playback (Tier A, the state the shared SDK bridge reports) and control
+//! Playback: embedded playback (Tier A, the state the SDK bridge reports) and control
 //! of other Spotify Connect devices (Tier B, through the Web API).
 //!
 //! Rules:
@@ -6,7 +6,7 @@
 //!   reduced to the fields `ora-types` defines, and anything malformed is dropped.
 //! - The access token reaches the bridge only through `sdk_token`, for the SDK's
 //!   `getOAuthToken`, and only once the sign-in covers `EmbeddedPlayback`.
-//! - Device IDs stay here; clients get opaque keys.
+//! - Device IDs stay here; the UI gets opaque keys.
 //! - While this app's SDK device plays, its reports win over the Web API (DO_NEXT §4.5).
 //! - Progress is never polled: the UI interpolates `positionMs` from `updatedAtMs`, and the
 //!   Web API state is fetched only on events, on focus and at a low rate.
@@ -512,7 +512,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     }
 
     /// The `+` control: adds the track playing now to Liked Songs, or removes it from there.
-    /// Returns whether it's liked afterwards, for the client's "Added to Liked Songs" message.
+    /// Returns whether it's liked afterwards, for the UI's "Added to Liked Songs" message.
     pub async fn toggle_liked(&self) -> Result<bool, OraError> {
         self.require(Feature::LibrarySaveRemove)?;
         let (item, liked) = self
@@ -634,7 +634,7 @@ fn public_device(device: &ApiDevice, key: String, this_app: bool) -> Device {
     }
 }
 
-/// This app's SDK device while it plays. Clients show their own name for it.
+/// This app's SDK device while it plays. The UI shows its own name for it.
 fn this_app(id: &str) -> Device {
     Device {
         key: device_key(id),

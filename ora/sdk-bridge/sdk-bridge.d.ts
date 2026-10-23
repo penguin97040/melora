@@ -1,9 +1,9 @@
-// Types for sdk-bridge.js, so TypeScript clients can install the shared bridge.
+// Types for sdk-bridge.js, so the TypeScript UI can install the bridge.
 
 export interface BridgeOptions {
-  /** The client's IPC call, for example `invoke` from `@tauri-apps/api/core`. */
+  /** The app's IPC call, for example `invoke` from `@tauri-apps/api/core`. */
   invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-  /** The client's IPC channel class, for example `Channel` from `@tauri-apps/api/core`. */
+  /** The app's IPC channel class, for example `Channel` from `@tauri-apps/api/core`. */
   Channel: new () => { onmessage: (message: never) => void };
   /** The device name shown in Spotify's device list. */
   name: string;

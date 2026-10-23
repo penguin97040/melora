@@ -1,4 +1,4 @@
-// Generates one `allow-*` permission per command; clients grant them to their main window only.
+// Generates one `allow-*` permission per command; the app grants them to its main window only.
 const COMMANDS: &[&str] = &[
     "status",
     "sign_in",

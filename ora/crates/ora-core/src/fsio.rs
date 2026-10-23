@@ -1,4 +1,4 @@
-//! Hardened reads and writes for the small settings files in a client's settings folder
+//! Hardened reads and writes for the small settings files in the app's settings folder
 //! (`spotify.json`, and the app's own preferences). One copy, so a fix reaches every file.
 
 use std::{

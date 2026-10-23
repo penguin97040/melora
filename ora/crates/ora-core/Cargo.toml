@@ -1,7 +1,7 @@
 [package]
 name = "ora-core"
 version = "0.1.0"
-description = "Tauri-free shared logic for Spotify desktop clients"
+description = "Tauri-free Spotify logic for Melora"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

@@ -4,7 +4,7 @@
 use crate::secret::Secret;
 use std::sync::Mutex;
 
-/// The refresh token, alone, under the client's service name.
+/// The refresh token, alone, under the app's service name.
 pub const REFRESH_TOKEN: &str = "spotify-refresh-token";
 /// Non-secret session details as JSON: `{authorizedAt, scopes, accountId, clientId}`.
 pub const SESSION: &str = "spotify-session";

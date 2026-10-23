@@ -1,6 +1,5 @@
-//! Shared client logic without any UI or Tauri dependency: configuration, sign-in, the Spotify
-//! Web API client, playback and feature availability. Each client wires this in through its own
-//! shell (`ora-tauri` for Tauri apps).
+//! Melora's Spotify logic without any UI or Tauri dependency: configuration, sign-in, the Spotify
+//! Web API client, playback and feature availability. The app wires it in through `ora-tauri`.
 
 pub mod api;
 pub mod browser;
