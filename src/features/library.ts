@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
   albumTracks,
+  getQueue,
   likedTracks,
   listPlaylists,
   playlistTracks,
+  recentlyPlayed,
   savedAlbums,
   savedEpisodes,
   savedShows,
@@ -15,6 +17,7 @@ import type {
   CatalogItem,
   PlayRequest,
   PlaylistSummary,
+  QueueView,
   SpotifyStatus,
   TrackRow,
 } from '../native/client';
@@ -29,7 +32,21 @@ export type ListSource =
   | { kind: 'show'; show: CatalogItem }
   /** Saved albums or saved shows: a list of albums or shows to open. */
   | { kind: 'albums' }
-  | { kind: 'shows' };
+  | { kind: 'shows' }
+  /** The latest tracks played, newest first. */
+  | { kind: 'recent' }
+  /** What plays now and next; Spotify doesn't let apps reorder it. */
+  | { kind: 'queue' };
+
+/** Sources listed as tracks and episodes in the centre's track table. */
+export type TrackSource = Exclude<
+  ListSource,
+  { kind: 'albums' | 'shows' | 'queue' }
+>;
+
+export function isTrackList(source: ListSource): source is TrackSource {
+  return !isCatalog(source) && source.kind !== 'queue';
+}
 
 /** Sources whose rows are albums or shows rather than tracks and episodes. */
 export type CatalogSource = Extract<ListSource, { kind: 'albums' | 'shows' }>;
@@ -130,13 +147,71 @@ export async function fetchTracks(key: string, offset: number) {
       return albumTracks(id, offset);
     case 'show':
       return showEpisodes(id, offset);
+    case 'recent':
+      return recentlyPlayed();
     default:
       return playlistTracks(id, offset);
   }
 }
 
 export async function fetchCatalog(key: string, offset: number) {
-  return key === 'albums' ? savedAlbums(offset) : savedShows(offset);
+  // Home keys its lists per account (`albums:<account>`).
+  return key.split(':')[0] === 'albums'
+    ? savedAlbums(offset)
+    : savedShows(offset);
+}
+
+export type Queue = {
+  view: QueueView | null;
+  loading: boolean;
+  error: unknown;
+  refresh: () => void;
+};
+
+/**
+ * The queue for `scope` (the account; `null` reads nothing), read again whenever `trigger`
+ * changes (the item playing now) or on `refresh`. The last answer stays while a new one loads.
+ */
+export function useQueue(scope: string | null, trigger: string): Queue {
+  const [refreshes, setRefreshes] = useState(0);
+  const [state, setState] = useState<{
+    scope: string | null;
+    want: string;
+    view: QueueView | null;
+    error: unknown;
+  }>({ scope: null, want: '', view: null, error: null });
+  const want = `${trigger}#${refreshes}`;
+
+  useEffect(() => {
+    if (scope === null) return;
+    let active = true;
+    void getQueue().then(
+      (view) => {
+        if (active) setState({ scope, want, view, error: null });
+      },
+      (error: unknown) => {
+        if (!active) return;
+        setState((previous) => ({
+          scope,
+          want,
+          view: previous.scope === scope ? previous.view : null,
+          error,
+        }));
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [scope, want]);
+
+  const current = state.scope === scope && scope !== null;
+  const settled = current && state.want === want;
+  return {
+    view: current ? state.view : null,
+    loading: scope !== null && !settled,
+    error: settled ? state.error : null,
+    refresh: () => setRefreshes((n) => n + 1),
+  };
 }
 
 /** `savedStates` takes at most this many URIs at once. */

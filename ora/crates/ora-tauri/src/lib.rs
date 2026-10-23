@@ -9,7 +9,7 @@ use ora_core::{
     store::KeyringStore,
     types::{
         CatalogPage, Device, Feature, OraError, PlayRequest, PlaybackStatus, PlayerCommand,
-        PlaylistPage, Profile, SdkEvent, SearchKind, SearchResults, Status, TrackPage,
+        PlaylistPage, Profile, QueueView, SdkEvent, SearchKind, SearchResults, Status, TrackPage,
     },
     Options, Ora,
 };
@@ -119,6 +119,9 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             show_episodes,
             saved_states,
             set_saved,
+            queue,
+            add_to_queue,
+            recently_played,
             search,
             search_page,
             play
@@ -537,6 +540,37 @@ async fn set_saved<R: Runtime>(
 ) -> Result<(), OraError> {
     main_only(&window)?;
     ora.0.set_saved(&uris, saved).await
+}
+
+/// What plays now and next on the active device.
+#[tauri::command]
+async fn queue<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+) -> Result<QueueView, OraError> {
+    main_only(&window)?;
+    ora.0.queue().await
+}
+
+/// Adds a track or episode to the active device's queue.
+#[tauri::command]
+async fn add_to_queue<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    uri: String,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.add_to_queue(&uri).await
+}
+
+/// The tracks played most recently, newest first.
+#[tauri::command]
+async fn recently_played<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+) -> Result<TrackPage, OraError> {
+    main_only(&window)?;
+    ora.0.recently_played().await
 }
 
 /// Plays from a list on the active device, or on this app's own. A refresh follows, so a

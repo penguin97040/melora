@@ -12,6 +12,8 @@ import {
 } from '../features/search';
 import type { Searched, SearchSection } from '../features/search';
 import type { CatalogItem, SearchKind } from '../native/client';
+import { menuPoint } from '../features/menu';
+import type { MenuPoint } from '../features/menu';
 
 type Props = {
   query: string;
@@ -26,6 +28,8 @@ type Props = {
   /** The `open.spotify.com` page of what's playing now, to mark its row. */
   playingUrl: string | null;
   onPlay: (kind: SearchKind, items: CatalogItem[], item: CatalogItem) => void;
+  /** A song's or episode's context menu, for "Add to queue". */
+  onMenu: (item: CatalogItem, at: MenuPoint) => void;
 };
 
 /** The subtitle and the two cells after the title, per kind. */
@@ -54,13 +58,16 @@ function ResultTable({
   items,
   playingUrl,
   onPlay,
+  onMenu,
 }: {
   section: SearchSection;
   items: CatalogItem[];
   playingUrl: string | null;
   onPlay: (item: CatalogItem) => void;
+  onMenu: (item: CatalogItem, at: MenuPoint) => void;
 }) {
   const [title, third, fourth] = section.columns;
+  const queueable = section.kind === 'track' || section.kind === 'episode';
   return (
     <div className="track-table-wrapper">
       <table className="track-table">
@@ -98,6 +105,11 @@ function ResultTable({
                         : 'Spotify can’t play this in your country.'
                     }
                     onClick={() => onPlay(item)}
+                    onContextMenu={(event) => {
+                      if (!queueable || !item.playable) return;
+                      event.preventDefault();
+                      onMenu(item, menuPoint(event));
+                    }}
                   >
                     <span>{item.name || 'Untitled'}</span>
                     <span className="track-artist">{subtitle}</span>
@@ -125,6 +137,7 @@ export function SpotifySearch({
   more,
   playingUrl,
   onPlay,
+  onMenu,
 }: Props) {
   const end = useEndOfList(more);
   const wanted = query.trim();
@@ -174,6 +187,7 @@ export function SpotifySearch({
             items={more.items}
             playingUrl={playingUrl}
             onPlay={(item) => onPlay(section.kind, more.items, item)}
+            onMenu={onMenu}
           />
           <div ref={end}>
             {more.loading ? (
@@ -245,6 +259,7 @@ export function SpotifySearch({
                   items={shown}
                   playingUrl={playingUrl}
                   onPlay={(row) => onPlay(item.kind, page.items, row)}
+                  onMenu={onMenu}
                 />
               </section>
             );

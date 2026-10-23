@@ -41,9 +41,24 @@ const LIBRARY: {
     name: 'Your Episodes',
     subtitle: 'Your saved episodes',
   },
+  {
+    source: { kind: 'recent' },
+    icon: '↺',
+    name: 'Recently Played',
+    subtitle: 'Your last 50 tracks',
+  },
+  {
+    source: { kind: 'queue' },
+    icon: '≡',
+    name: 'Queue',
+    subtitle: 'What plays next',
+  },
 ];
 
-/** The sidebar's library while signed in: Liked Songs and the saved lists, then playlists. */
+/**
+ * The sidebar's library while signed in: Liked Songs, the saved lists, Recently Played and the
+ * queue, then playlists.
+ */
 export function SpotifyPlaylists({ playlists, selected, onSelect }: Props) {
   const count = playlists.total + LIBRARY.length;
   return (

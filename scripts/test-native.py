@@ -376,7 +376,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         key('\ue007')
         wait_script("return document.querySelector('.track-title').textContent === 'Amber lines';")
         assert execute("return getComputedStyle(document.activeElement).outlineStyle !== 'none';")
-        execute("document.querySelectorAll('.nav-item')[2].click();")
+        execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Settings')).click();")
         wait_script("return !!document.querySelector('select');")
         cases = [(width, height, scale) for width, heights in [(1440, [940, 820, 660, 520]), (1360, [940, 660, 520])] for height in heights for scale in [100, 125, 150, 175, 200]]
         cases += [(720, 850, 100), (720, 850, 200)]
@@ -385,7 +385,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             call('POST', '/window/rect', {'width': width, 'height': height})
             execute("const el=document.querySelector('select');el.value=String(arguments[0]);el.dispatchEvent(new Event('change',{bubbles:true}));", scale)
             wait_script(f"return document.documentElement.style.fontSize === '{scale}%';")
-            execute("document.querySelectorAll('.nav-item')[0].click();")
+            execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Library')).click();")
             wait_script("return !!document.querySelector('.track-table');")
             assert execute("return document.querySelector('.masthead').getBoundingClientRect().height <= 37 * arguments[0] / 100;", scale), 'Header expanded beyond compact layout'
             assert execute("return document.querySelector('.track-select').getBoundingClientRect().width > 90;"), 'Track text space collapsed'
@@ -411,6 +411,23 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             """, scale))
             if width == 1440 and height == 940 and scale == 100:
                 assert geometry[-1]['playerScrollHeight'] <= geometry[-1]['playerHeight'] + 1, 'Full player does not fit at preferred size'
+                # Home made the navigation four items; they and the connection note must still
+                # fit the sidebar's upper third, above the playlists.
+                nav_fit = execute("""
+                    const nav = document.querySelector('.sidebar nav');
+                    const note = nav.querySelector('.connection-note').getBoundingClientRect();
+                    const lists = document.querySelector('.sidebar .playlists').getBoundingClientRect();
+                    return {items: nav.querySelectorAll('.nav-item').length, scroll: nav.scrollHeight,
+                        height: nav.clientHeight, noteBottom: note.bottom, listsTop: lists.top};
+                """)
+                assert nav_fit['items'] == 4 and nav_fit['scroll'] <= nav_fit['height'] + 1 and nav_fit['noteBottom'] <= nav_fit['listsTop'] + 1, f'Navigation does not fit at preferred size: {nav_fit}'
+                # Signed out, Home asks to sign in and reads nothing from Spotify.
+                execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Home')).click();")
+                wait_script("return document.querySelector('main h1')?.textContent === 'Home' && document.querySelector('main').textContent.includes('Sign in with Spotify to see your Home.');")
+                shot = call('GET', '/screenshot')
+                (output / 'melora-linux-home-signed-out.png').write_bytes(base64.b64decode(shot))
+                execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Library')).click();")
+                wait_script("return !!document.querySelector('.track-table');")
             execute("document.querySelector('.transport button').focus();")
             # Establish keyboard modality after native resize/reflow.
             # Use a real keyboard Tab before checking the keyboard outline.
@@ -436,7 +453,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                     note.bottom <= document.querySelector('.status-strip').getBoundingClientRect().top;
             """), 'Fallback scrolling cannot expose full player details'
             assert execute('return scrollY === 0;'), 'Player scrolling moved the whole document'
-            execute("document.querySelectorAll('.nav-item')[2].click();")
+            execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Settings')).click();")
             wait_script("return !!document.querySelector('select');")
         assert execute("return document.querySelector('main').clientHeight > 180;"), 'Content pane collapsed at 200% scale'
         execute("document.querySelector('main').scrollIntoView();")
@@ -466,7 +483,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         # Spotify account: the real ora plugin over IPC, with a synthetic Client ID only.
         # Sign-in itself needs a browser and Spotify, so it is never started here.
         assert execute("return !!document.querySelector('.connection-note .link-button');"), 'Set up Spotify action missing'
-        execute("document.querySelectorAll('.nav-item')[2].click();")
+        execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Settings')).click();")
         wait_script("return !!document.querySelector('#spotify-client-id');")
         execute("document.querySelector('.account-settings').scrollIntoView({block: 'start'});")
         (output / 'melora-linux-settings-spotify-setup.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
@@ -663,7 +680,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             'device_list': 'signed out: opens beside the player inside the window, not over the artwork, layout unchanged, sign-in hint, Escape returns focus',
             'device_list_placement': {key: device_list[key] for key in ('inside', 'overArtwork', 'layoutKept')},
             'brand_icon': 'loaded', 'artwork_geometry': artwork, 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
-            'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar',
+            'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar', 'preferred_nav_fit': 'Home, Library, Search, Settings and the connection note above the playlists; signed-out Home asks to sign in',
             'preview_modes': 'keyboard toggle/cycle, navigation retention and relaunch reset passed',
             'player_geometry': geometry, 'artwork_height_sequence': height_sequence,
             'artwork_wrapping': wrapping,

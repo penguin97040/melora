@@ -695,6 +695,10 @@ input[type='range'] {
   display: grid;
   gap: 0.25rem;
 }
+.queue-menu {
+  width: 12rem;
+  padding: 0.35rem;
+}
 .device-option {
   width: 100%;
   min-height: 2.5rem;

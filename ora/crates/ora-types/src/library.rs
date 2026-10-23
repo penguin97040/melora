@@ -64,6 +64,17 @@ pub struct TrackPage {
     pub next_offset: Option<u32>,
 }
 
+/// What plays now and what Spotify plays after it (`GET /me/player/queue`). Spotify lets apps
+/// read the queue and add to it, but not reorder or remove from it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct QueueView {
+    pub current: Option<TrackRow>,
+    /// In the order they'll play; `position` counts from 0 after `current`.
+    pub next: Vec<TrackRow>,
+}
+
 /// What a click in a list starts playing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]

@@ -2075,3 +2075,184 @@ async fn library_views_need_their_permission() {
     );
     assert_eq!(h.http.requests().len(), before);
 }
+
+const QUEUE: &str = r#"{"currently_playing":{"type":"track","uri":"spotify:track:AbCd0123456789xyzXYZ01",
+    "name":"Song","duration_ms":200000,"artists":[{"name":"A"}],"album":{"name":"B","images":[]}},
+    "queue":[
+    {"type":"episode","uri":"spotify:episode:EpIs0123456789xyzXYZ01","name":"Ep",
+     "duration_ms":3600000,"release_date":"2026-10-02","show":{"name":"Talk","images":[]}},
+    null,
+    {"type":"track","uri":"spotify:track:AbCd0123456789xyzXYZ02","name":"Next",
+     "duration_ms":100000,"artists":[],"album":{"name":"C","images":[]}}]}"#;
+
+#[tokio::test]
+async fn the_queue_is_read_on_demand_and_shared_while_fresh() {
+    let h = playback_ready("queue-read").await;
+    let before = h.http.requests().len();
+    h.http.push(200, QUEUE);
+    let queue = h.ora.queue().await.unwrap();
+    assert_eq!(
+        queue.current.as_ref().map(|row| row.name.as_str()),
+        Some("Song")
+    );
+    let next: Vec<(u32, &str, &str)> = queue
+        .next
+        .iter()
+        .map(|row| (row.position, row.name.as_str(), row.album.as_str()))
+        .collect();
+    assert_eq!(next, [(0, "Ep", "Talk"), (1, "Next", "C")]);
+    // Asked again straight away, the same answer serves.
+    h.ora.queue().await.unwrap();
+    assert_eq!(h.http.requests().len(), before + 1);
+    assert_eq!(
+        h.http.requests().last().unwrap().url,
+        "https://api.spotify.com/v1/me/player/queue"
+    );
+
+    // Nothing playing is an empty queue, not an error.
+    h.ora.library().forget_queue();
+    h.http.push(204, "");
+    assert_eq!(
+        h.ora.queue().await,
+        Ok(ora_types::QueueView {
+            current: None,
+            next: Vec::new(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn adding_to_the_queue_goes_to_the_device_playing_now() {
+    let h = playback_ready("queue-add").await;
+    let song = "spotify:track:AbCd0123456789xyzXYZ01";
+    // Melora is a device but nothing plays: Spotify has no queue to add to.
+    let before = h.http.requests().len();
+    assert_eq!(
+        h.ora.add_to_queue(song).await,
+        Err(OraError::NoActiveDevice)
+    );
+    // Only tracks and episodes can be queued.
+    assert_eq!(
+        h.ora
+            .add_to_queue("spotify:album:AlBu0123456789xyzXYZ01")
+            .await,
+        Err(OraError::InvalidSpotifyLink)
+    );
+    assert_eq!(h.http.requests().len(), before);
+
+    // While Melora plays, it's queued here.
+    h.ora.playback().apply(ora_types::SdkEvent::State {
+        state: Some(ora_types::SdkState {
+            paused: false,
+            position_ms: 0,
+            duration_ms: 200_000,
+            track: None,
+            shuffle: false,
+            repeat: ora_types::RepeatMode::default(),
+            disallows: ora_types::Disallows::default(),
+        }),
+    });
+    h.http.push(200, QUEUE);
+    h.ora.queue().await.unwrap();
+    h.http.push(204, "");
+    h.ora.add_to_queue(song).await.unwrap();
+    let added = h.http.requests().last().unwrap().clone();
+    assert_eq!(added.method, Method::Post);
+    assert_eq!(
+        added.url,
+        "https://api.spotify.com/v1/me/player/queue?uri=spotify%3Atrack%3AAbCd0123456789xyzXYZ01&device_id=device1"
+    );
+    // The queue is read again after an addition.
+    h.http.push(200, QUEUE);
+    h.ora.queue().await.unwrap();
+    assert!(h
+        .http
+        .requests()
+        .last()
+        .unwrap()
+        .url
+        .ends_with("/me/player/queue"));
+
+    // While another device plays, it's queued there.
+    h.http.push(200, REMOTE_STATE);
+    h.ora
+        .playback()
+        .apply(ora_types::SdkEvent::State { state: None });
+    h.ora.refresh_playback().await.unwrap();
+    h.http.push(204, "");
+    h.ora
+        .add_to_queue("spotify:episode:EpIs0123456789xyzXYZ01")
+        .await
+        .unwrap();
+    assert!(h
+        .http
+        .requests()
+        .last()
+        .unwrap()
+        .url
+        .ends_with("uri=spotify%3Aepisode%3AEpIs0123456789xyzXYZ01&device_id=phone1"));
+
+    // A Premium refusal comes back as such.
+    h.http.push(
+        403,
+        r#"{"error":{"status":403,"message":"Premium required"}}"#,
+    );
+    assert!(matches!(
+        h.ora.add_to_queue(song).await,
+        Err(OraError::Forbidden { .. })
+    ));
+}
+
+#[tokio::test]
+async fn recently_played_lists_the_latest_tracks_and_needs_its_permission() {
+    let h = playback_ready("recent").await;
+    assert_eq!(
+        h.ora.recently_played().await.err(),
+        Some(OraError::NeedsScope {
+            feature: Feature::RecentlyPlayed
+        })
+    );
+    let scopes = format!("{PLAYBACK_SCOPES} user-read-recently-played");
+    h.http
+        .push(200, &tokens_with_scope("acc2", Some("ref2"), &scopes));
+    h.http.push(200, ME);
+    h.ora.sign_in(Some(Feature::RecentlyPlayed)).await.unwrap();
+    let before = h.http.requests().len();
+    h.http.push(
+        200,
+        r#"{"href":"x","limit":50,"next":null,"cursors":{"after":"1","before":"0"},"items":[
+        {"played_at":"2026-10-23T01:00:00Z","context":null,"track":{"type":"track",
+         "uri":"spotify:track:AbCd0123456789xyzXYZ01","name":"Song","duration_ms":200000,
+         "artists":[{"name":"A"}],"album":{"name":"B","images":[]}}},
+        null,
+        {"played_at":"2026-10-23T00:50:00Z","track":null},
+        {"played_at":"2026-10-23T00:40:00Z","track":{"type":"track",
+         "uri":"spotify:track:AbCd0123456789xyzXYZ01","name":"Song","duration_ms":200000,
+         "artists":[{"name":"A"}],"album":{"name":"B","images":[]}}}]}"#,
+    );
+    let recent = h.ora.recently_played().await.unwrap();
+    // A track played twice is listed twice, each in its own place.
+    let rows: Vec<(u32, Option<&str>)> = recent
+        .items
+        .iter()
+        .map(|row| (row.position, row.uri.as_deref()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (0, Some("spotify:track:AbCd0123456789xyzXYZ01")),
+            (1, Some("spotify:track:AbCd0123456789xyzXYZ01"))
+        ]
+    );
+    assert_eq!((recent.total, recent.next_offset), (2, None));
+    // Cached briefly.
+    h.ora.recently_played().await.unwrap();
+    let urls: Vec<String> = h.http.requests()[before..]
+        .iter()
+        .map(|r| r.url.clone())
+        .collect();
+    assert_eq!(
+        urls,
+        ["https://api.spotify.com/v1/me/player/recently-played?limit=50"]
+    );
+}

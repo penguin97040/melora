@@ -9,6 +9,8 @@
 //! - Whether items are saved is asked 40 at a time (Spotify's limit) and remembered for a
 //!   minute; saving and removing also go 40 at a time. A change forgets the saved lists it
 //!   affects and updates the player's `+` when it's the track playing now.
+//! - The queue is read on demand (kept 2 seconds, so identical reads share one request, and
+//!   forgotten after an addition); recently played is kept 30 seconds.
 
 use crate::{
     api,
@@ -19,7 +21,7 @@ use crate::{
     store::CredentialStore,
     Ora,
 };
-use ora_types::{CatalogPage, Feature, OraError, PlaylistPage, TrackPage};
+use ora_types::{CatalogPage, Feature, OraError, PlaylistPage, QueueView, TrackPage};
 use std::{
     collections::HashMap,
     sync::Mutex,
@@ -29,6 +31,8 @@ use std::{
 const PLAYLIST_TTL: Duration = Duration::from_secs(5 * 60);
 const ALBUM_TTL: Duration = Duration::from_secs(30 * 60);
 const SAVED_TTL: Duration = Duration::from_secs(60);
+const QUEUE_TTL: Duration = Duration::from_secs(2);
+const RECENT_TTL: Duration = Duration::from_secs(30);
 /// Spotify's largest documented offset for these lists.
 const MAX_OFFSET: u32 = 100_000;
 /// One request from the UI covers at most this many items; Melora splits it into batches.
@@ -51,6 +55,8 @@ pub struct Library {
     shows: Cache<CatalogPage>,
     show_episodes: Cache<TrackPage>,
     episodes: Cache<TrackPage>,
+    queue: Cache<QueueView>,
+    recent: Cache<TrackPage>,
     saved: Mutex<SavedStates>,
 }
 
@@ -65,6 +71,8 @@ impl Default for Library {
             shows: Cache::new(SAVED_TTL),
             show_episodes: Cache::new(PLAYLIST_TTL),
             episodes: Cache::new(SAVED_TTL),
+            queue: Cache::new(QUEUE_TTL),
+            recent: Cache::new(RECENT_TTL),
             saved: Mutex::default(),
         }
     }
@@ -74,6 +82,11 @@ impl Library {
     /// After Liked Songs changed.
     pub(crate) fn forget_liked(&self) {
         self.liked.clear();
+    }
+
+    /// After something was added to the queue.
+    pub(crate) fn forget_queue(&self) {
+        self.queue.clear();
     }
 
     fn states(&self) -> std::sync::MutexGuard<'_, SavedStates> {
@@ -280,6 +293,30 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 self.authorised(|access| async move {
                     api::show_episodes(http, &access, id, offset).await
                 })
+            })
+            .await
+    }
+
+    /// What plays now and next on the active device.
+    pub async fn queue(&self) -> Result<QueueView, OraError> {
+        self.require(Feature::Queue)?;
+        let http = self.http();
+        self.library()
+            .queue
+            .get(&self.cache_scope(), "queue", || {
+                self.authorised(|access| async move { api::queue(http, &access).await })
+            })
+            .await
+    }
+
+    /// The tracks played most recently, newest first.
+    pub async fn recently_played(&self) -> Result<TrackPage, OraError> {
+        self.require(Feature::RecentlyPlayed)?;
+        let http = self.http();
+        self.library()
+            .recent
+            .get(&self.cache_scope(), "recent", || {
+                self.authorised(|access| async move { api::recently_played(http, &access).await })
             })
             .await
     }

@@ -11,6 +11,7 @@ import type { PlayRequest } from './bindings/PlayRequest';
 import type { PlaylistPage } from './bindings/PlaylistPage';
 import type { PlaylistSummary } from './bindings/PlaylistSummary';
 import type { Profile } from './bindings/Profile';
+import type { QueueView } from './bindings/QueueView';
 import type { CatalogItem } from './bindings/CatalogItem';
 import type { SearchKind } from './bindings/SearchKind';
 import type { CatalogPage } from './bindings/CatalogPage';
@@ -29,6 +30,7 @@ export type {
   PlaylistPage,
   PlaylistSummary,
   Profile,
+  QueueView,
   CatalogItem,
   SearchKind,
   CatalogPage,
@@ -58,7 +60,7 @@ export const defaultPreferences: Preferences = {
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
     return {
-      version: '0.5.4',
+      version: '0.5.5',
       platform: 'Browser preview',
       preferences: defaultPreferences,
       storageError: null,
@@ -344,6 +346,24 @@ export async function savedStates(uris: string[]): Promise<boolean[]> {
 export async function setSaved(uris: string[], saved: boolean): Promise<void> {
   requireDesktop();
   return invoke<void>('plugin:ora|set_saved', { uris, saved });
+}
+
+/** What plays now and next on the active device (read on demand). */
+export async function getQueue(): Promise<QueueView> {
+  requireDesktop();
+  return invoke<QueueView>('plugin:ora|queue');
+}
+
+/** Adds a track or episode to the queue of the device playing now. */
+export async function addToQueue(uri: string): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|add_to_queue', { uri });
+}
+
+/** The tracks played most recently, newest first (one page of up to 50). */
+export async function recentlyPlayed(): Promise<TrackPage> {
+  requireDesktop();
+  return invoke<TrackPage>('plugin:ora|recently_played');
 }
 
 /** The first page of each kind of result. A newer search rejects this one with `cancelled`. */

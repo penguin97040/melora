@@ -9,8 +9,8 @@ use crate::{
 };
 use ora_types::{
     CatalogItem, CatalogPage, DeviceKind, Disallows, ForbiddenHint, OraError, PlaylistPage,
-    PlaylistSummary, Profile, RepeatMode, SdkState, SdkTrack, SearchKind, SearchResults, TrackPage,
-    TrackRow,
+    PlaylistSummary, Profile, QueueView, RepeatMode, SdkState, SdkTrack, SearchKind, SearchResults,
+    TrackPage, TrackRow,
 };
 use serde::Deserialize;
 
@@ -1004,6 +1004,104 @@ pub async fn show_episodes<H: HttpClient>(
     );
     let body: PageBody<ItemBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
     Ok(item_page(body, offset))
+}
+
+/// More queued items than this aren't listed; Spotify sends about 20.
+pub const MAX_QUEUE: usize = 100;
+
+#[derive(Deserialize)]
+struct QueueBody {
+    currently_playing: Option<ItemBody>,
+    #[serde(default)]
+    queue: Vec<Option<ItemBody>>,
+}
+
+/// `GET /me/player/queue`: what plays now and next. With nothing playing, Spotify may answer
+/// 204 or send no current item; both are an empty queue.
+pub async fn queue<H: HttpClient>(http: &H, access: &Secret) -> Result<QueueView, ApiError> {
+    let response = http
+        .send(Request {
+            method: Method::Get,
+            url: format!("{API_BASE}/me/player/queue"),
+            bearer: Some(access.clone()),
+            form: Vec::new(),
+            json: None,
+        })
+        .await
+        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    if response.status == 204 {
+        return Ok(QueueView {
+            current: None,
+            next: Vec::new(),
+        });
+    }
+    if response.status != 200 {
+        return Err(error_for(&response, ForbiddenHint::Unknown));
+    }
+    let body: QueueBody =
+        serde_json::from_slice(&response.body).map_err(|_| ApiError::Other(OraError::Network))?;
+    let current = body.currently_playing.map(|item| track_row(item, 0, false));
+    let next = body
+        .queue
+        .into_iter()
+        .flatten()
+        .take(MAX_QUEUE)
+        .zip(0..)
+        .map(|(item, position)| track_row(item, position, false))
+        .collect();
+    Ok(QueueView { current, next })
+}
+
+/// `POST /me/player/queue?uri=…&device_id=…`: a track or episode plays after the queue so far.
+pub async fn add_to_queue<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    item: &SpotifyUri,
+) -> Result<(), ApiError> {
+    let url = format!(
+        "{API_BASE}/me/player/queue?uri={}&device_id={}",
+        encode(&item.uri()),
+        encode(device_id)
+    );
+    player_send(http, access, Method::Post, url, None).await
+}
+
+/// Spotify's limit for recently played; it keeps no more history than this for apps.
+pub const RECENT: u32 = 50;
+
+#[derive(Deserialize)]
+struct PlayedBody {
+    track: Option<ItemBody>,
+}
+
+#[derive(Deserialize)]
+struct HistoryBody {
+    #[serde(default)]
+    items: Vec<Option<PlayedBody>>,
+}
+
+/// `GET /me/player/recently-played?limit=50`: the latest tracks played, newest first. A track
+/// played twice appears twice.
+pub async fn recently_played<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+) -> Result<TrackPage, ApiError> {
+    let url = format!("{API_BASE}/me/player/recently-played?limit={RECENT}");
+    let body: HistoryBody = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    let items: Vec<TrackRow> = body
+        .items
+        .into_iter()
+        .flatten()
+        .filter_map(|played| played.track)
+        .zip(0..)
+        .map(|(item, position)| track_row(item, position, false))
+        .collect();
+    Ok(TrackPage {
+        total: u32::try_from(items.len()).unwrap_or(u32::MAX),
+        items,
+        next_offset: None,
+    })
 }
 
 /// Spotify's limit for `/me/library` and `/me/library/contains`.

@@ -168,7 +168,7 @@ describe('Spotify playlists and Liked Songs', () => {
     const sidebar = await screen.findByRole('region', {
       name: 'Your Spotify playlists',
     });
-    expect(within(sidebar).getByText('06')).toBeInTheDocument();
+    expect(within(sidebar).getByText('08')).toBeInTheDocument();
     expect(within(sidebar).getAllByText('Kiri · 3 tracks')).toHaveLength(2);
     await user.click(
       within(sidebar).getByRole('button', { name: /Road trip/ }),

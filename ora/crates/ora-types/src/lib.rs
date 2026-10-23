@@ -11,7 +11,7 @@ pub mod search;
 pub use auth::{AuthState, Profile, Status};
 pub use error::{ForbiddenHint, OraError, SignInFailure};
 pub use features::Feature;
-pub use library::{PlayRequest, PlaylistPage, PlaylistSummary, TrackPage, TrackRow};
+pub use library::{PlayRequest, PlaylistPage, PlaylistSummary, QueueView, TrackPage, TrackRow};
 pub use playback::{
     Device, DeviceKind, Disallows, NowPlaying, PlaybackIssue, PlaybackStatus, PlayerCommand, Probe,
     RepeatMode, SdkErrorKind, SdkEvent, SdkState, SdkTrack, Tier,

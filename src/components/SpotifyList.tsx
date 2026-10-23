@@ -7,14 +7,16 @@ import {
   useEndOfList,
   useWindow,
 } from '../features/library';
-import type { ListSource, Paged } from '../features/library';
+import type { Paged, TrackSource } from '../features/library';
 import { releaseDate } from '../features/search';
 import type { TrackRow } from '../native/client';
 import type { Feature } from '../native/bindings/Feature';
+import { menuPoint } from '../features/menu';
+import type { MenuPoint } from '../features/menu';
 import { SaveButton } from './SaveButton';
 
 type Props = {
-  source: Exclude<ListSource, { kind: 'albums' | 'shows' }>;
+  source: TrackSource;
   list: Paged<TrackRow>;
   /** The `open.spotify.com` page of what's playing now, to mark its row. */
   playingUrl: string | null;
@@ -26,6 +28,8 @@ type Props = {
   onAllow: (feature: Feature) => void;
   /** Saves `uri` (a track, album or show) or removes it, `saved` being its state now. */
   onSave: (uri: string, saved: boolean) => void;
+  /** A row's context menu (right-click, the Menu key or Shift+F10), for "Add to queue". */
+  onMenu: (row: TrackRow, at: MenuPoint) => void;
 };
 
 type Heading = {
@@ -88,6 +92,16 @@ function headingFor(source: Props['source']): Heading {
         intro: 'Podcast episodes you’ve saved on Spotify, newest first.',
         noun: 'episode',
         empty: 'No saved episodes yet. Save one in Spotify to see it here.',
+        spotifyUrl: null,
+        container: null,
+      };
+    case 'recent':
+      return {
+        eyebrow: 'Your Spotify history',
+        title: 'Recently Played',
+        intro: 'The last 50 tracks you played on Spotify, newest first.',
+        noun: 'track',
+        empty: 'Nothing played yet. Tracks you play on Spotify appear here.',
         spotifyUrl: null,
         container: null,
       };
@@ -179,6 +193,7 @@ export function SpotifyList({
   onOpen,
   onAllow,
   onSave,
+  onMenu,
 }: Props) {
   const heading = headingFor(source);
   const playlist = source.kind === 'playlist' ? source.playlist : null;
@@ -291,6 +306,11 @@ export function SpotifyList({
                               : undefined
                           }
                           onClick={() => onPlay(row)}
+                          onContextMenu={(event) => {
+                            if (row.uri === null) return;
+                            event.preventDefault();
+                            onMenu(row, menuPoint(event));
+                          }}
                         >
                           <span>{row.name || 'Unknown title'}</span>
                           <span className="track-artist">

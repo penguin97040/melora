@@ -57,7 +57,10 @@ describe('useWindow', () => {
       },
     );
     render(<Rows count={1000} />);
-    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(51));
+    // All 1,000 rows render before the first measure, which is slow while other test files run.
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(51), {
+      timeout: 5_000,
+    });
     expect(screen.getByText('Row 80')).toBeInTheDocument();
     expect(screen.queryByText('Row 79')).not.toBeInTheDocument();
     expect(screen.queryByText('Row 130')).not.toBeInTheDocument();

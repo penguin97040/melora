@@ -570,6 +570,39 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             .await
     }
 
+    /// Adds a track or episode to the queue of the device playing now: another device, or this
+    /// app while it's active. Spotify can't queue on a device that isn't playing.
+    pub async fn add_to_queue(&self, uri: &str) -> Result<(), OraError> {
+        self.require(Feature::AddToQueue)?;
+        let item = link::parse(uri)
+            .filter(|item| matches!(item.kind, Kind::Track | Kind::Episode))
+            .ok_or(OraError::InvalidSpotifyLink)?;
+        let device = match self.playback().remote_target() {
+            Some(target) => {
+                self.require(Feature::ConnectControl)?;
+                if target.restricted {
+                    return Err(OraError::Forbidden {
+                        hint: ForbiddenHint::Restricted,
+                    });
+                }
+                target.id
+            }
+            None if self.playback().status().tier == Tier::Active => self
+                .playback()
+                .device_id()
+                .ok_or(OraError::NoActiveDevice)?,
+            None => return Err(OraError::NoActiveDevice),
+        };
+        let (http, device, item) = (self.http(), device.as_str(), &item);
+        let result = self
+            .authorised(
+                |access| async move { api::add_to_queue(http, &access, device, item).await },
+            )
+            .await;
+        self.library().forget_queue();
+        result
+    }
+
     /// Starts playback on this app's SDK device: the pasted link when there is one, otherwise
     /// whatever the account was last playing (transferred here).
     pub async fn play_here(&self, link: Option<&str>) -> Result<(), OraError> {

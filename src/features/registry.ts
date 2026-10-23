@@ -34,8 +34,10 @@ export const featureUi = {
   Shuffle: { kind: 'wired', label: 'Shuffle' },
   Repeat: { kind: 'wired', label: 'Repeat' },
   NowPlaying: { kind: 'wired', label: 'Now playing' },
-  Queue: phase('Queue', 6),
-  AddToQueue: phase('Add to queue', 6),
+  // The sidebar's Queue (read on demand, with Spotify's no-reordering note) and every song and
+  // episode row's context menu (Phase 6d).
+  Queue: { kind: 'wired', label: 'Queue' },
+  AddToQueue: { kind: 'wired', label: 'Add to queue' },
   // Search, for songs, artists, albums, playlists and episodes (Phase 6b).
   Search: { kind: 'wired', label: 'Search' },
   // The sidebar's Liked Songs, Albums, Podcasts, Your Episodes and playlists, and their tracks
@@ -49,5 +51,6 @@ export const featureUi = {
   PlaylistDetail: { kind: 'wired', label: 'Playlist tracks' },
   PlaylistEdit: phase('Edit playlists', 6),
   CreatePlaylist: phase('Create playlist', 6),
-  RecentlyPlayed: phase('Recently played', 6),
+  // The sidebar's Recently Played and Home's section (Phase 6d).
+  RecentlyPlayed: { kind: 'wired', label: 'Recently played' },
 } satisfies Record<Feature, FeatureUi>;

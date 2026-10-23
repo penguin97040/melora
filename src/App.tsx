@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { DevicePicker } from './components/DevicePicker';
 import { PlaybackTest } from './components/PlaybackTest';
 import { Player } from './components/Player';
+import { QueueMenu } from './components/QueueMenu';
+import type { MenuPoint } from './features/menu';
 import { SpotifyAccount } from './components/SpotifyAccount';
+import { SpotifyHome } from './components/SpotifyHome';
 import { SpotifyList } from './components/SpotifyList';
 import { SpotifyPlaylists } from './components/SpotifyPlaylists';
 import { SpotifyCatalog } from './components/SpotifyCatalog';
+import { SpotifyQueue } from './components/SpotifyQueue';
 import { SpotifySearch } from './components/SpotifySearch';
 import { WindowHeader } from './components/WindowHeader';
 import { accountName, profileRetryable } from './features/account';
@@ -15,14 +19,18 @@ import {
   fetchTracks,
   granted,
   isCatalog,
+  isTrackList,
   playRequestFor,
   sourceKey,
   usePaged,
+  useQueue,
   useSavedStates,
 } from './features/library';
 import type { ListSource } from './features/library';
 import {
   deviceControlAllowed,
+  deviceName,
+  isLive,
   isRemote,
   libraryAllowed,
   likeable,
@@ -36,6 +44,7 @@ import {
 } from './features/search';
 import {
   activatePlayback,
+  addToQueue,
   allowFeature,
   allowLibrary,
   defaultPreferences,
@@ -85,7 +94,7 @@ function connectionLabel(status: SpotifyStatus | null): string {
   }
 }
 
-type View = 'Library' | 'Search' | 'Settings';
+type View = 'Home' | 'Library' | 'Search' | 'Settings';
 const initialTrack = previewTracks[0]!;
 /** While Melora isn't playing itself, the active device is read this often (DO_NEXT §4.5). */
 export const REMOTE_REFRESH_MS = 30_000;
@@ -126,6 +135,12 @@ export default function App() {
   const [spotify, setSpotify] = useState<SpotifyStatus | null>(null);
   const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
   const [likeMessage, setLikeMessage] = useState<string | null>(null);
+  // A row's open context menu ("Add to queue").
+  const [menu, setMenu] = useState<{
+    uri: string;
+    name: string;
+    at: MenuPoint;
+  } | null>(null);
   // Keyed to the URL, so a new profile or account gets a fresh attempt.
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const revealRequested = useRef(false);
@@ -334,11 +349,16 @@ export default function App() {
   const shown = showPlaylists ? source : null;
   const list = usePaged(
     shown &&
-      !isCatalog(shown) &&
+      isTrackList(shown) &&
       (shown.kind !== 'playlist' || shown.playlist.readable)
       ? sourceKey(shown)
       : null,
     fetchTracks,
+  );
+  // Read while the queue is open, again whenever the item playing changes.
+  const queue = useQueue(
+    view === 'Library' && shown?.kind === 'queue' ? (profile?.id ?? '') : null,
+    nowUrl ?? '',
   );
   const catalog = usePaged(
     shown && isCatalog(shown) ? sourceKey(shown) : null,
@@ -347,7 +367,7 @@ export default function App() {
   // Whether the list's tracks (and the album or show itself) are saved, asked per list. Liked
   // Songs are saved by definition.
   const savedUris =
-    shown && !isCatalog(shown) && shown.kind !== 'liked'
+    shown && isTrackList(shown) && shown.kind !== 'liked'
       ? [
           ...(shown.kind === 'album' ? [shown.album.uri] : []),
           ...(shown.kind === 'show' ? [shown.show.uri] : []),
@@ -418,6 +438,7 @@ export default function App() {
       () => {
         list.retry();
         catalog.retry();
+        queue.refresh();
       },
       (error: unknown) => setWindowMessage(describeFailure(error)),
     );
@@ -433,6 +454,27 @@ export default function App() {
         if (!mayLike && !libraryAllowed(await allowLibrary())) return;
         await setSaved([uri], !isSaved);
         saved.remember([uri], !isSaved);
+      } catch (error) {
+        setWindowMessage(describeFailure(error));
+      }
+    })();
+  }
+
+  /**
+   * "Add to queue" from a row's menu. Without the playback permission it asks for it first.
+   * Spotify queues only on a device that's playing; otherwise the message says to choose one.
+   */
+  function queueItem(uri: string): void {
+    void (async () => {
+      try {
+        if (
+          !granted(spotify, 'AddToQueue') &&
+          !granted(await allowFeature('AddToQueue'), 'AddToQueue')
+        )
+          return;
+        await addToQueue(uri);
+        setLikeMessage('Added to queue');
+        queue.refresh();
       } catch (error) {
         setWindowMessage(describeFailure(error));
       }
@@ -506,7 +548,8 @@ export default function App() {
   const artistCount = new Set(tracks.map((track) => track.artist)).size;
   const spotifyList = view === 'Library' && shown !== null;
   const spotifySearch = view === 'Search' && searchesSpotify;
-  const fromSpotify = spotifyList || spotifySearch;
+  const spotifyHome = view === 'Home' && spotify?.auth.kind === 'signedIn';
+  const fromSpotify = spotifyList || spotifySearch || spotifyHome;
 
   return (
     <div
@@ -522,21 +565,23 @@ export default function App() {
             <div className="panel-label">
               <span>Explore</span>
             </div>
-            {(['Library', 'Search', 'Settings'] as const).map((name, i) => (
-              <button
-                key={name}
-                className={`nav-item ${view === name ? 'active' : ''}`}
-                aria-current={view === name ? 'page' : undefined}
-                onClick={() => {
-                  setView(name);
-                  setPlayMessage(null);
-                }}
-              >
-                <span className="nav-index">0{i + 1}</span>
-                {name}
-                <span className="nav-arrow">›</span>
-              </button>
-            ))}
+            {(['Home', 'Library', 'Search', 'Settings'] as const).map(
+              (name, i) => (
+                <button
+                  key={name}
+                  className={`nav-item ${view === name ? 'active' : ''}`}
+                  aria-current={view === name ? 'page' : undefined}
+                  onClick={() => {
+                    setView(name);
+                    setPlayMessage(null);
+                  }}
+                >
+                  <span className="nav-index">0{i + 1}</span>
+                  {name}
+                  <span className="nav-arrow">›</span>
+                </button>
+              ),
+            )}
             <p className="connection-note">
               <span
                 className={`status-dot ${spotify?.auth.kind === 'signedIn' ? 'connected' : ''}`}
@@ -692,6 +737,23 @@ export default function App() {
                 />
               )}
             </section>
+          ) : view === 'Home' ? (
+            <SpotifyHome
+              spotify={spotify}
+              playback={playback}
+              playlists={showPlaylists ? playlists : null}
+              playingUrl={nowUrl}
+              onOpen={chooseList}
+              onOpenItem={openItem}
+              onPlayRecent={(rows, row) =>
+                playFrom(playRequestFor({ kind: 'recent' }, rows, row))
+              }
+              onMenu={(row, at) =>
+                row.uri && setMenu({ uri: row.uri, name: row.name, at })
+              }
+              onAllow={allow}
+              onOpenSettings={() => setView('Settings')}
+            />
           ) : spotifySearch ? (
             <SpotifySearch
               query={query}
@@ -703,6 +765,17 @@ export default function App() {
               more={more}
               playingUrl={nowUrl}
               onPlay={playResult}
+              onMenu={(item, at) =>
+                setMenu({ uri: item.uri, name: item.name, at })
+              }
+            />
+          ) : spotifyList && shown?.kind === 'queue' ? (
+            <SpotifyQueue
+              queue={queue}
+              device={
+                playback && isLive(playback) ? deviceName(playback) : null
+              }
+              onAllow={allow}
             />
           ) : spotifyList && shown && isCatalog(shown) ? (
             <SpotifyCatalog
@@ -711,13 +784,16 @@ export default function App() {
               onOpenItem={openItem}
               onAllow={allow}
             />
-          ) : spotifyList && shown && !isCatalog(shown) ? (
+          ) : spotifyList && shown && isTrackList(shown) ? (
             <SpotifyList
               source={shown}
               list={list}
               playingUrl={nowUrl}
               saved={saved.known}
               onSave={saveItem}
+              onMenu={(row, at) =>
+                row.uri && setMenu({ uri: row.uri, name: row.name, at })
+              }
               onPlay={playRow}
               onPlayAll={() =>
                 shown.kind === 'playlist' &&
@@ -898,6 +974,14 @@ export default function App() {
             : 'Native details pending'}
         </span>
       </footer>
+      {menu && (
+        <QueueMenu
+          name={menu.name}
+          at={menu.at}
+          onAdd={() => queueItem(menu.uri)}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }
