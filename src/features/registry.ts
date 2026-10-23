@@ -36,7 +36,8 @@ export const featureUi = {
   NowPlaying: { kind: 'wired', label: 'Now playing' },
   Queue: phase('Queue', 6),
   AddToQueue: phase('Add to queue', 6),
-  Search: phase('Search', 6),
+  // Search, for songs, artists, albums, playlists and episodes (Phase 6b).
+  Search: { kind: 'wired', label: 'Search' },
   // The sidebar's Liked Songs and playlists, and their tracks in the centre (Phase 6a).
   SavedTracks: { kind: 'wired', label: 'Liked Songs' },
   SavedAlbums: phase('Saved albums', 6),

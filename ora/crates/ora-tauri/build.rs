@@ -22,6 +22,8 @@ const COMMANDS: &[&str] = &[
     "playlists",
     "playlist_tracks",
     "liked_tracks",
+    "search",
+    "search_page",
     "play",
 ];
 

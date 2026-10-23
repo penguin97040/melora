@@ -9,7 +9,8 @@ use crate::{
 };
 use ora_types::{
     DeviceKind, Disallows, ForbiddenHint, OraError, PlaylistPage, PlaylistSummary, Profile,
-    RepeatMode, SdkState, SdkTrack, TrackPage, TrackRow,
+    RepeatMode, SdkState, SdkTrack, SearchItem, SearchKind, SearchPage, SearchResults, TrackPage,
+    TrackRow,
 };
 use serde::Deserialize;
 
@@ -842,6 +843,175 @@ fn track_row(item: ItemBody, position: u32, local: bool) -> TrackRow {
 
 /// Nothing Melora lists is a day long; larger values are malformed.
 const MAX_DURATION_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Spotify's largest search page.
+pub const SEARCH_PAGE: u32 = 10;
+/// Search pages through the first 1,000 results of a kind; Spotify refuses offsets past that.
+pub const SEARCH_LIMIT: u32 = 1_000;
+
+/// A result of any kind; fields a kind doesn't have are absent.
+#[derive(Deserialize)]
+struct ResultBody {
+    uri: Option<String>,
+    id: Option<String>,
+    name: Option<String>,
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    artists: Vec<NamedBody>,
+    album: Option<NamedBody>,
+    release_date: Option<String>,
+    total_tracks: Option<u32>,
+    owner: Option<OwnerBody>,
+    /// A playlist's count; renamed from `tracks` in 2026, both are read.
+    items: Option<CountBody>,
+    tracks: Option<CountBody>,
+    is_playable: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct SearchBody {
+    tracks: Option<PageBody<ResultBody>>,
+    artists: Option<PageBody<ResultBody>>,
+    albums: Option<PageBody<ResultBody>>,
+    playlists: Option<PageBody<ResultBody>>,
+    episodes: Option<PageBody<ResultBody>>,
+}
+
+impl SearchBody {
+    fn take(&mut self, kind: SearchKind) -> Option<PageBody<ResultBody>> {
+        match kind {
+            SearchKind::Track => self.tracks.take(),
+            SearchKind::Artist => self.artists.take(),
+            SearchKind::Album => self.albums.take(),
+            SearchKind::Playlist => self.playlists.take(),
+            SearchKind::Episode => self.episodes.take(),
+        }
+    }
+}
+
+/// `GET /search?q=…&type=track,artist,album,playlist,episode&limit=10`: the first page of each
+/// kind.
+pub async fn search<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    query: &str,
+) -> Result<SearchResults, ApiError> {
+    let types = SearchKind::ALL.map(SearchKind::name).join(",");
+    let url = format!(
+        "{API_BASE}/search?q={}&type={types}&limit={SEARCH_PAGE}",
+        encode(query)
+    );
+    let mut body: SearchBody = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    let mut page = |kind| search_page(kind, body.take(kind), 0);
+    Ok(SearchResults {
+        tracks: page(SearchKind::Track),
+        artists: page(SearchKind::Artist),
+        albums: page(SearchKind::Album),
+        playlists: page(SearchKind::Playlist),
+        episodes: page(SearchKind::Episode),
+    })
+}
+
+/// `GET /search?q=…&type=<kind>&limit=10&offset=…`: a further page of one kind.
+pub async fn search_more<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    query: &str,
+    kind: SearchKind,
+    offset: u32,
+) -> Result<SearchPage, ApiError> {
+    let url = format!(
+        "{API_BASE}/search?q={}&type={}&limit={SEARCH_PAGE}&offset={offset}",
+        encode(query),
+        kind.name()
+    );
+    let mut body: SearchBody = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    Ok(search_page(kind, body.take(kind), offset))
+}
+
+/// Results keep their place among all of the kind's results; `null`s and results whose link
+/// isn't of the kind asked for are skipped.
+fn search_page(kind: SearchKind, body: Option<PageBody<ResultBody>>, offset: u32) -> SearchPage {
+    let Some(body) = body else {
+        return SearchPage {
+            items: Vec::new(),
+            total: 0,
+            next_offset: None,
+        };
+    };
+    let next_offset = body
+        .next_offset(offset)
+        .filter(|next| next.saturating_add(SEARCH_PAGE) <= SEARCH_LIMIT);
+    let items = body
+        .items
+        .into_iter()
+        .zip(offset..)
+        .filter_map(|(result, position)| search_item(kind, result?, position))
+        .collect();
+    SearchPage {
+        items,
+        total: body.total,
+        next_offset,
+    }
+}
+
+fn search_item(kind: SearchKind, body: ResultBody, position: u32) -> Option<SearchItem> {
+    // A playlist's ID is enough when its URI is missing.
+    let uri = match body.uri {
+        Some(uri) => uri,
+        None if kind == SearchKind::Playlist => format!("spotify:playlist:{}", body.id?),
+        None => return None,
+    };
+    let link = crate::link::parse(&uri).filter(|link| link.kind.name() == kind.name())?;
+    let by = match body.owner {
+        Some(owner) => owner.display_name.into_iter().collect(),
+        None => body
+            .artists
+            .into_iter()
+            .filter_map(|artist| artist.name)
+            .collect(),
+    };
+    Some(SearchItem {
+        position,
+        uri: link.uri(),
+        name: clip(&body.name.unwrap_or_default(), MAX_TEXT),
+        by: names(by),
+        album: clip(
+            &body.album.and_then(|album| album.name).unwrap_or_default(),
+            MAX_TEXT,
+        ),
+        release_date: body
+            .release_date
+            .filter(|date| is_release_date(date))
+            .unwrap_or_default(),
+        total: body
+            .total_tracks
+            .or(body.items.or(body.tracks).map(|count| count.total)),
+        duration_ms: body.duration_ms.map(|ms| ms.min(MAX_DURATION_MS)),
+        playable: body.is_playable != Some(false),
+        spotify_url: link.page(),
+    })
+}
+
+/// At most a few names, each clipped, none empty.
+fn names(names: Vec<String>) -> Vec<String> {
+    names
+        .into_iter()
+        .take(MAX_ARTISTS)
+        .map(|name| clip(&name, MAX_TEXT))
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, digits only.
+fn is_release_date(date: &str) -> bool {
+    let parts: Vec<&str> = date.split('-').collect();
+    parts.len() <= 3
+        && parts
+            .iter()
+            .zip([4, 2, 2])
+            .all(|(part, width)| part.len() == width && part.bytes().all(|b| b.is_ascii_digit()))
+}
 
 fn encode(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()

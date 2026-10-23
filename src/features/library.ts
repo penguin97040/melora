@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { likedTracks, listPlaylists, playlistTracks } from '../native/client';
 import type {
   PlayRequest,
@@ -165,4 +165,24 @@ export function usePaged<T>(
     retry: () =>
       setWant((previous) => ({ ...previous, attempt: previous.attempt + 1 })),
   };
+}
+
+/**
+ * The next page loads as the element this ref is attached to (the end of the list) scrolls
+ * into view; a button beside it does the same.
+ */
+export function useEndOfList<T>(list: Paged<T>) {
+  const end = useRef<HTMLDivElement>(null);
+  const { nextOffset, loading, loadMore } = list;
+  useEffect(() => {
+    const element = end.current;
+    if (!element || nextOffset === null || loading) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMore();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [nextOffset, loading, loadMore]);
+  return end;
 }

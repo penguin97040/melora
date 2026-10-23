@@ -21,6 +21,7 @@ use crate::{
     pkce,
     playback::Playback,
     scopes_for,
+    search::Search,
     secret::Secret,
     store::{CredentialStore, StoreError, REFRESH_TOKEN, SESSION},
 };
@@ -98,6 +99,7 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
     status: watch::Sender<Status>,
     playback: Playback,
     library: Library,
+    search: Search,
 }
 
 impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
@@ -132,6 +134,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             status,
             playback: Playback::default(),
             library: Library::default(),
+            search: Search::default(),
         }
     }
 
@@ -146,6 +149,10 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 
     pub(crate) fn library(&self) -> &Library {
         &self.library
+    }
+
+    pub(crate) fn search_state(&self) -> &Search {
+        &self.search
     }
 
     /// The signed-in account's Spotify ID, once the profile has loaded.

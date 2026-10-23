@@ -5,6 +5,7 @@ import { Player } from './components/Player';
 import { SpotifyAccount } from './components/SpotifyAccount';
 import { SpotifyList } from './components/SpotifyList';
 import { SpotifyPlaylists } from './components/SpotifyPlaylists';
+import { SpotifySearch } from './components/SpotifySearch';
 import { WindowHeader } from './components/WindowHeader';
 import { accountName, profileRetryable } from './features/account';
 import {
@@ -23,6 +24,12 @@ import {
   likeable,
   playbackAllowed,
 } from './features/playback';
+import {
+  fetchSearchPage,
+  searchKey,
+  searchPlayRequest,
+  useSearch,
+} from './features/search';
 import {
   activatePlayback,
   allowFeature,
@@ -50,6 +57,8 @@ import type {
   PlayerCommand,
   PlayRequest,
   Preferences,
+  SearchItem,
+  SearchKind,
   SpotifyStatus,
   TrackRow,
   WindowChrome,
@@ -99,6 +108,8 @@ export default function App() {
   const [playMessage, setPlayMessage] = useState<string | null>(null);
   const [selected, setSelected] = useState(initialTrack);
   const [query, setQuery] = useState('');
+  // The kind of Spotify search result "See all" shows, or `null` for the overview.
+  const [seeAll, setSeeAll] = useState<SearchKind | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [storageMessage, setStorageMessage] = useState<string | null>(null);
@@ -322,6 +333,14 @@ export default function App() {
       : null,
     fetchTracks,
   );
+  // Signed in, Search searches Spotify; signed out, it filters the preview tracks.
+  const searchesSpotify = granted(spotify, 'Search');
+  const searched = useSearch(query, searchesSpotify);
+  const wanted = query.trim();
+  const more = usePaged(
+    searchesSpotify && seeAll && wanted ? searchKey(seeAll, wanted) : null,
+    fetchSearchPage,
+  );
 
   function chooseList(next: ListSource | null): void {
     setSource(next);
@@ -340,6 +359,20 @@ export default function App() {
 
   function playRow(row: TrackRow): void {
     if (shown) playFrom(playRequestFor(shown, list.items, row));
+  }
+
+  function changeQuery(next: string): void {
+    setQuery(next);
+    setSeeAll(null);
+    setPlayMessage(null);
+  }
+
+  function playResult(
+    kind: SearchKind,
+    items: SearchItem[],
+    item: SearchItem,
+  ): void {
+    playFrom(searchPlayRequest(kind, items, item));
   }
 
   /** Signs in again with the permission `feature` needs, then loads the list again. */
@@ -410,7 +443,9 @@ export default function App() {
       : !activePlaylist.artist || track.artist === activePlaylist.artist,
   );
   const artistCount = new Set(tracks.map((track) => track.artist)).size;
-  const fromSpotify = view === 'Library' && shown !== null;
+  const spotifyList = view === 'Library' && shown !== null;
+  const spotifySearch = view === 'Search' && searchesSpotify;
+  const fromSpotify = spotifyList || spotifySearch;
 
   return (
     <div
@@ -431,7 +466,10 @@ export default function App() {
                 key={name}
                 className={`nav-item ${view === name ? 'active' : ''}`}
                 aria-current={view === name ? 'page' : undefined}
-                onClick={() => setView(name)}
+                onClick={() => {
+                  setView(name);
+                  setPlayMessage(null);
+                }}
               >
                 <span className="nav-index">0{i + 1}</span>
                 {name}
@@ -593,7 +631,19 @@ export default function App() {
                 />
               )}
             </section>
-          ) : fromSpotify && shown ? (
+          ) : spotifySearch ? (
+            <SpotifySearch
+              query={query}
+              onQuery={changeQuery}
+              inputRef={searchRef}
+              searched={searched}
+              seeAll={seeAll}
+              onSeeAll={setSeeAll}
+              more={more}
+              playingUrl={nowUrl}
+              onPlay={playResult}
+            />
+          ) : spotifyList && shown ? (
             <SpotifyList
               source={shown}
               list={list}

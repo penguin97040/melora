@@ -1528,6 +1528,14 @@ async fn a_click_plays_on_melora_or_on_the_active_device() {
             PlayRequest::Items { uris: Vec::new() },
             OraError::Unsupported,
         ),
+        // Spotify starts an artist's top tracks only from the beginning.
+        (
+            PlayRequest::Context {
+                uri: "spotify:artist:ArTi0123456789xyzXYZ01".into(),
+                position: Some(2),
+            },
+            OraError::Unsupported,
+        ),
         (
             PlayRequest::Items {
                 uris: vec!["spotify:track:AbCd0123456789xyzXYZ01".into(); 101],
@@ -1540,6 +1548,20 @@ async fn a_click_plays_on_melora_or_on_the_active_device() {
     }
     assert_eq!(h.http.requests().len(), count);
 
+    // A search result's artist plays their top tracks.
+    h.http.push(204, "");
+    h.ora
+        .play(PlayRequest::Context {
+            uri: "spotify:artist:ArTi0123456789xyzXYZ01".into(),
+            position: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        h.http.requests().last().unwrap().json,
+        Some(serde_json::json!({"context_uri": "spotify:artist:ArTi0123456789xyzXYZ01"}))
+    );
+
     // With no device at all, the UI is told to choose one.
     h.ora.playback().reset();
     assert_eq!(
@@ -1551,4 +1573,196 @@ async fn a_click_plays_on_melora_or_on_the_active_device() {
             .await,
         Err(OraError::NoActiveDevice)
     );
+}
+
+const SEARCH: &str = r#"{
+  "tracks":{"href":"x","limit":10,"offset":0,"previous":null,"total":250,
+   "next":"https://api.spotify.com/v1/search?offset=10&limit=10","items":[
+   {"type":"track","uri":"spotify:track:AbCd0123456789xyzXYZ01","name":"Song","duration_ms":200000,
+    "artists":[{"name":"A"},{"name":"B"}],"album":{"name":"Album","images":[]},"is_playable":true},
+   null,
+   {"type":"artist","uri":"spotify:artist:ArTi0123456789xyzXYZ01","name":"Wrong kind"}]},
+  "artists":{"href":"x","limit":10,"offset":0,"previous":null,"next":null,"total":1,"items":[
+   {"type":"artist","uri":"spotify:artist:ArTi0123456789xyzXYZ01","name":"Kiri","genres":[]}]},
+  "albums":{"href":"x","limit":10,"offset":0,"previous":null,"next":null,"total":2,"items":[
+   {"type":"album","uri":"spotify:album:AlBu0123456789xyzXYZ01","name":"Record",
+    "release_date":"2021-03","total_tracks":12,"artists":[{"name":"Kiri"}]},
+   {"type":"album","uri":"spotify:album:AlBu0123456789xyzXYZ02","name":"Odd date",
+    "release_date":"21/03/2021","total_tracks":1,"artists":[]}]},
+  "playlists":{"href":"x","limit":10,"offset":0,"previous":null,"next":null,"total":2,"items":[
+   null,
+   {"id":"PlAyLiSt0123456789abcd","name":"Mix","owner":{"id":"o","display_name":"Someone"},
+    "items":{"total":30}}]},
+  "episodes":{"href":"x","limit":10,"offset":0,"previous":null,"next":null,"total":1,"items":[
+   {"type":"episode","uri":"spotify:episode:EpIs0123456789xyzXYZ01","name":"Ep",
+    "duration_ms":3600000,"release_date":"2026-10-01","is_playable":false}]}
+}"#;
+
+/// A result with only the fields every kind has.
+fn result(position: u32, uri: &str, name: &str) -> ora_types::SearchItem {
+    let (kind, id) = uri["spotify:".len()..].split_once(':').unwrap();
+    ora_types::SearchItem {
+        position,
+        uri: uri.into(),
+        name: name.into(),
+        by: Vec::new(),
+        album: String::new(),
+        release_date: String::new(),
+        total: None,
+        duration_ms: None,
+        playable: true,
+        spotify_url: format!("https://open.spotify.com/{kind}/{id}"),
+    }
+}
+
+#[tokio::test]
+async fn search_lists_each_kind_and_caches_by_query() {
+    use ora_types::{SearchItem, SearchKind};
+    let h = playback_ready("search").await;
+    let before = h.http.requests().len();
+    h.http.push(200, SEARCH);
+    let found = h.ora.search("  Kiri & Te ").await.unwrap();
+    assert_eq!(
+        h.http.requests()[before].url,
+        "https://api.spotify.com/v1/search?q=Kiri+%26+Te\
+         &type=track,artist,album,playlist,episode&limit=10"
+    );
+
+    // Rows keep their place among all results; nulls and links of the wrong kind are skipped.
+    assert_eq!(
+        (found.tracks.total, found.tracks.next_offset),
+        (250, Some(3))
+    );
+    assert_eq!(
+        found.tracks.items,
+        [SearchItem {
+            by: vec!["A".into(), "B".into()],
+            album: "Album".into(),
+            duration_ms: Some(200_000),
+            ..result(0, "spotify:track:AbCd0123456789xyzXYZ01", "Song")
+        }]
+    );
+    assert_eq!(
+        found.artists.items,
+        [result(0, "spotify:artist:ArTi0123456789xyzXYZ01", "Kiri")]
+    );
+    assert_eq!(
+        found.albums.items,
+        [
+            SearchItem {
+                by: vec!["Kiri".into()],
+                release_date: "2021-03".into(),
+                total: Some(12),
+                ..result(0, "spotify:album:AlBu0123456789xyzXYZ01", "Record")
+            },
+            // A date in another shape is dropped.
+            SearchItem {
+                total: Some(1),
+                ..result(1, "spotify:album:AlBu0123456789xyzXYZ02", "Odd date")
+            },
+        ]
+    );
+    // A playlist without a URI is found by its ID.
+    assert_eq!(
+        found.playlists.items,
+        [SearchItem {
+            by: vec!["Someone".into()],
+            total: Some(30),
+            ..result(1, "spotify:playlist:PlAyLiSt0123456789abcd", "Mix")
+        }]
+    );
+    assert_eq!(
+        found.episodes.items,
+        [SearchItem {
+            release_date: "2026-10-01".into(),
+            duration_ms: Some(3_600_000),
+            playable: false,
+            ..result(0, "spotify:episode:EpIs0123456789xyzXYZ01", "Ep")
+        }]
+    );
+
+    // The same query in any case, and "See all"'s first page, come from memory.
+    assert_eq!(h.ora.search("kiri & te").await.unwrap(), found);
+    assert_eq!(
+        h.ora
+            .search_page("KIRI & TE", SearchKind::Album, 0)
+            .await
+            .unwrap(),
+        found.albums
+    );
+    assert_eq!(h.http.requests().len() - before, 1);
+
+    // Further pages ask for one kind, and stop at Spotify's 1,000 results.
+    let page = |offset: u32| {
+        let items = [r#"{"uri":"spotify:track:AbCd0123456789xyzXYZ01","name":"Again"}"#; 10];
+        format!(
+            r#"{{"tracks":{{"href":"x","limit":10,"offset":{offset},"previous":null,
+            "total":5000,"next":"https://api.spotify.com/v1/search?more","items":[{}]}}}}"#,
+            items.join(",")
+        )
+    };
+    h.http.push(200, &page(980));
+    let more = h
+        .ora
+        .search_page("Kiri & Te", SearchKind::Track, 980)
+        .await
+        .unwrap();
+    assert_eq!(
+        h.http.requests().last().unwrap().url,
+        "https://api.spotify.com/v1/search?q=Kiri+%26+Te&type=track&limit=10&offset=980"
+    );
+    assert_eq!((more.items[0].position, more.next_offset), (980, Some(990)));
+    h.http.push(200, &page(990));
+    let last = h
+        .ora
+        .search_page("Kiri & Te", SearchKind::Track, 990)
+        .await
+        .unwrap();
+    assert_eq!((last.items.len(), last.next_offset), (10, None));
+
+    // Queries and offsets Spotify would refuse never reach it.
+    let count = h.http.requests().len();
+    for query in ["   ".to_owned(), "a".repeat(201), "line\nbreak".to_owned()] {
+        assert_eq!(h.ora.search(&query).await, Err(OraError::Unsupported));
+    }
+    assert_eq!(
+        h.ora.search_page("Kiri", SearchKind::Track, 991).await,
+        Err(OraError::Unsupported)
+    );
+    assert_eq!(h.http.requests().len(), count);
+}
+
+#[tokio::test]
+async fn a_newer_search_cancels_the_older_one() {
+    let h = playback_ready("search-cancel").await;
+    let before = h.http.requests().len();
+    h.http.set_delay(Some(Duration::from_millis(50)));
+    h.http.push(200, SEARCH);
+    let (older, newer) = tokio::join!(h.ora.search("Kir"), async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        h.ora.search("Kiri").await
+    });
+    assert_eq!(older, Err(OraError::Cancelled));
+    assert_eq!(newer.unwrap().artists.items.len(), 1);
+    assert_eq!(h.http.requests().len() - before, 2);
+    assert_eq!(h.ora.status().last_error, None);
+
+    // The cancelled query wasn't cached: asking again asks Spotify.
+    h.http.set_delay(None);
+    h.http.push(200, SEARCH);
+    assert!(h.ora.search("Kir").await.is_ok());
+    assert_eq!(h.http.requests().len() - before, 3);
+}
+
+#[tokio::test]
+async fn search_needs_a_sign_in() {
+    let h = harness("search-signed-out", User::Approve);
+    assert_eq!(h.ora.search("Kiri").await, Err(OraError::SignedOut));
+    assert_eq!(
+        h.ora
+            .search_page("Kiri", ora_types::SearchKind::Track, 10)
+            .await,
+        Err(OraError::SignedOut)
+    );
+    assert!(h.http.requests().is_empty());
 }

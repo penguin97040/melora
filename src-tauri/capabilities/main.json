@@ -32,6 +32,8 @@
     "ora:allow-playlists",
     "ora:allow-playlist-tracks",
     "ora:allow-liked-tracks",
+    "ora:allow-search",
+    "ora:allow-search-page",
     "ora:allow-play",
     "core:window:allow-minimize",
     "core:window:allow-close",

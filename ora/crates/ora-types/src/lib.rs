@@ -6,6 +6,7 @@ pub mod error;
 pub mod features;
 pub mod library;
 pub mod playback;
+pub mod search;
 
 pub use auth::{AuthState, Profile, Status};
 pub use error::{ForbiddenHint, OraError, SignInFailure};
@@ -15,3 +16,4 @@ pub use playback::{
     Device, DeviceKind, Disallows, NowPlaying, PlaybackIssue, PlaybackStatus, PlayerCommand, Probe,
     RepeatMode, SdkErrorKind, SdkEvent, SdkState, SdkTrack, Tier,
 };
+pub use search::{SearchItem, SearchKind, SearchPage, SearchResults};

@@ -66,7 +66,8 @@ pub struct TrackPage {
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum PlayRequest {
-    /// A playlist (`spotify:playlist:…`), from the row at `position`, or from the start.
+    /// A playlist or album, from the row at `position` or from the start, or an artist (their
+    /// top tracks, from the start only).
     Context { uri: String, position: Option<u32> },
     /// Tracks or episodes in this order. Liked Songs has no context Spotify lets apps play.
     Items { uris: Vec<String> },

@@ -762,6 +762,18 @@ select {
   color: var(--text);
   border-radius: 0;
 }
+/* A Spotify search section's name and its "See all". */
+.results-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 1.5rem 1.5rem 0;
+  font-size: 0.75rem;
+}
+.results-heading .eyebrow {
+  font-weight: normal;
+}
 .empty-state,
 .error-message {
   padding: 1rem 1.5rem;

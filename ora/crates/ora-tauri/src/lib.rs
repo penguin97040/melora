@@ -9,7 +9,7 @@ use ora_core::{
     store::KeyringStore,
     types::{
         Device, Feature, OraError, PlayRequest, PlaybackStatus, PlayerCommand, PlaylistPage,
-        Profile, SdkEvent, Status, TrackPage,
+        Profile, SdkEvent, SearchKind, SearchPage, SearchResults, Status, TrackPage,
     },
     Options, Ora,
 };
@@ -112,6 +112,8 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             playlists,
             playlist_tracks,
             liked_tracks,
+            search,
+            search_page,
             play
         ])
         .setup(move |app, _api| {
@@ -424,6 +426,30 @@ async fn liked_tracks<R: Runtime>(
 ) -> Result<TrackPage, OraError> {
     main_only(&window)?;
     ora.0.liked_tracks(offset).await
+}
+
+/// The first page of each kind of result. A newer search makes this one return `Cancelled`.
+#[tauri::command]
+async fn search<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    query: String,
+) -> Result<SearchResults, OraError> {
+    main_only(&window)?;
+    ora.0.search(&query).await
+}
+
+/// One page of one kind of result, for "See all".
+#[tauri::command]
+async fn search_page<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    query: String,
+    kind: SearchKind,
+    offset: u32,
+) -> Result<SearchPage, OraError> {
+    main_only(&window)?;
+    ora.0.search_page(&query, kind, offset).await
 }
 
 /// Plays from a list on the active device, or on this app's own. A refresh follows, so a

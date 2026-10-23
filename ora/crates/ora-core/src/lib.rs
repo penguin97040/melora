@@ -13,6 +13,7 @@ pub mod loopback;
 pub mod oauth;
 pub mod pkce;
 pub mod playback;
+pub mod search;
 pub mod secret;
 pub mod session;
 pub mod store;

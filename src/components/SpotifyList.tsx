@@ -1,6 +1,5 @@
-import { useEffect, useRef } from 'react';
 import { describeFailure, isOraError } from '../features/account';
-import { countLabel, trackTime } from '../features/library';
+import { countLabel, trackTime, useEndOfList } from '../features/library';
 import type { ListSource, Paged } from '../features/library';
 import type { TrackRow } from '../native/client';
 import type { Feature } from '../native/bindings/Feature';
@@ -38,19 +37,7 @@ export function SpotifyList({
       ? list.error.feature
       : null;
 
-  const more = useRef<HTMLDivElement>(null);
-  const { nextOffset, loading, loadMore } = list;
-  useEffect(() => {
-    // The next page loads as the end of the list scrolls into view; the button does the same.
-    const end = more.current;
-    if (!end || nextOffset === null || loading) return;
-    if (typeof IntersectionObserver === 'undefined') return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) loadMore();
-    });
-    observer.observe(end);
-    return () => observer.disconnect();
-  }, [nextOffset, loading, loadMore]);
+  const more = useEndOfList(list);
 
   return (
     <>

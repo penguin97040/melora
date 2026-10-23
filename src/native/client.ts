@@ -11,6 +11,10 @@ import type { PlayRequest } from './bindings/PlayRequest';
 import type { PlaylistPage } from './bindings/PlaylistPage';
 import type { PlaylistSummary } from './bindings/PlaylistSummary';
 import type { Profile } from './bindings/Profile';
+import type { SearchItem } from './bindings/SearchItem';
+import type { SearchKind } from './bindings/SearchKind';
+import type { SearchPage } from './bindings/SearchPage';
+import type { SearchResults } from './bindings/SearchResults';
 import type { Status } from './bindings/Status';
 import type { TrackPage } from './bindings/TrackPage';
 import type { TrackRow } from './bindings/TrackRow';
@@ -25,6 +29,10 @@ export type {
   PlaylistPage,
   PlaylistSummary,
   Profile,
+  SearchItem,
+  SearchKind,
+  SearchPage,
+  SearchResults,
   TrackPage,
   TrackRow,
 };
@@ -50,7 +58,7 @@ export const defaultPreferences: Preferences = {
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
     return {
-      version: '0.5.2',
+      version: '0.5.3',
       platform: 'Browser preview',
       preferences: defaultPreferences,
       storageError: null,
@@ -288,6 +296,22 @@ export async function playlistTracks(
 export async function likedTracks(offset: number): Promise<TrackPage> {
   requireDesktop();
   return invoke<TrackPage>('plugin:ora|liked_tracks', { offset });
+}
+
+/** The first page of each kind of result. A newer search rejects this one with `cancelled`. */
+export async function searchSpotify(query: string): Promise<SearchResults> {
+  requireDesktop();
+  return invoke<SearchResults>('plugin:ora|search', { query });
+}
+
+/** One page of one kind of result, for "See all". */
+export async function searchPage(
+  query: string,
+  kind: SearchKind,
+  offset: number,
+): Promise<SearchPage> {
+  requireDesktop();
+  return invoke<SearchPage>('plugin:ora|search_page', { query, kind, offset });
 }
 
 /** Plays from a list on the active device, or on Melora's own. */

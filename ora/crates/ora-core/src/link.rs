@@ -26,7 +26,7 @@ impl Kind {
         })
     }
 
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Kind::Album => "album",
             Kind::Artist => "artist",

@@ -603,13 +603,17 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 /// Spotify accepts long `uris` lists, but a click never needs more than a page or two.
 const MAX_PLAY_ITEMS: usize = 100;
 
-/// Checks a `PlayRequest` from the UI: a playlist or album, or tracks and episodes.
+/// Checks a `PlayRequest` from the UI: a playlist, album or artist, or tracks and episodes.
+/// Spotify starts only playlists and albums at a position.
 fn play_start(request: PlayRequest) -> Result<PlayStart, OraError> {
     match request {
         PlayRequest::Context { uri, position } => {
             let context = link::parse(&uri)
-                .filter(|uri| matches!(uri.kind, Kind::Playlist | Kind::Album))
+                .filter(|uri| matches!(uri.kind, Kind::Playlist | Kind::Album | Kind::Artist))
                 .ok_or(OraError::InvalidSpotifyLink)?;
+            if context.kind == Kind::Artist && position.is_some() {
+                return Err(OraError::Unsupported);
+            }
             Ok(PlayStart::Context { context, position })
         }
         PlayRequest::Items { uris } => {
