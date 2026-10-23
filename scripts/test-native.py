@@ -609,6 +609,36 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert brand['likeLabel'] == 'Add to Liked Songs' and brand['likeLoaded'] and brand['likeBesideTitle'], f'+ control wrong: {brand}'
         assert brand['likeHeight'] <= brand['lineHeight'] + 0.5, f'+ taller than the title line: {brand}'
         (output / 'melora-linux-live-player.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
+        # Podcast skip (owner, 23/10/2026): an episode swaps Previous and Next for 15-second skips in the same boxes.
+        transport_boxes = "return [...document.querySelectorAll('.player .transport button')].map(b => { const r = b.getBoundingClientRect(); return [b.getAttribute('aria-label'), r.left, r.top, r.width, r.height]; });"
+        track_boxes = execute(transport_boxes)
+        execute("""
+            window.__episodeReady = false;
+            const id = 'AbCd0123456789' + 'xyzXYZ02';
+            window.__TAURI_INTERNALS__.invoke('plugin:ora|sdk_event', {event: {type: 'state', state: {paused: true, positionMs: 60000,
+                    durationMs: 1800000,
+                    track: {uri: 'spotify:episode:' + id, name: 'Native test episode', artists: ['Test Show'],
+                            album: 'Test Show', imageUrl: null},
+                    shuffle: false, repeat: 'off',
+                    disallows: {pause: false, resume: false, next: false, previous: false, seek: false}}}})
+                .then(() => { window.__episodeReady = true; });
+        """)
+        wait_script("return window.__episodeReady && document.querySelector('.player .track-title')?.textContent === 'Native test episode';")
+        episode_boxes = execute(transport_boxes)
+        episode = execute("""
+            const player = document.querySelector('.player');
+            const skips = [...player.querySelectorAll('.transport button')].filter(b => b.getAttribute('aria-label').endsWith('15 seconds'));
+            return {skips: skips.map(b => b.getAttribute('aria-label')), enabled: skips.every(b => !b.disabled),
+                labelsDrawn: skips.every(b => b.querySelector('.skip-label').getBBox().width > 0),
+                noLike: !player.querySelector('.like-button'),
+                fits: player.scrollHeight <= player.clientHeight + 1};
+        """)
+        assert episode == {'skips': ['Back 15 seconds', 'Forward 15 seconds'], 'enabled': True, 'labelsDrawn': True,
+                           'noLike': True, 'fits': True}, f'Podcast skips wrong: {episode}'
+        assert [box[0] for box in episode_boxes] == ['Shuffle: Off', 'Back 15 seconds', 'Play', 'Forward 15 seconds', 'Repeat: Off'], f'Podcast row wrong: {episode_boxes}'
+        moved = [(a, b) for a, b in zip(track_boxes, episode_boxes) if any(abs(x - y) > 0.5 for x, y in zip(a[1:], b[1:]))]
+        assert not moved, f'Podcast skips moved the controls: {moved}'
+        (output / 'melora-linux-podcast-skip.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         execute("""
             window.__liveDone = false;
             window.__TAURI_INTERNALS__.invoke('plugin:ora|sdk_event', {event: {type: 'state', state: null}})
@@ -621,6 +651,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         (output / 'native-acceptance.json').write_text(json.dumps({
             'embedded_playback': 'signed-out refusals (access_token, play_here, playback_command), malformed report refused, probe accepted, no SDK script, test block shown',
             'live_player': 'synthetic SDK reports: real track, disallowed Next disabled, Open in Spotify, plain artwork, fits at 1440x940/100%, footer This app, preview restored',
+            'podcast_skip': 'synthetic episode: Back/Forward 15 seconds in the Previous/Next boxes, labels drawn, no +, fits',
             'spotify_brand': {key: round(brand[key], 1) for key in ('logoWidth', 'labelHeight', 'clearTop', 'clearBottom', 'clearRight', 'clearLeft', 'likeHeight', 'lineHeight', 'artworkHeight')},
             'engine_drm_probe': {key: engine_probe[key] for key in ('secure', 'widevine', 'playready', 'fairplay')},
             'spotify_account': 'plugin status, invalid Client ID and URL rejection, masked save and Settings screenshots passed; sign-in not run',

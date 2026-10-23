@@ -3,7 +3,15 @@ import type { ReactNode } from 'react';
 import type { PreviewTrack } from '../preview';
 import type { PlaybackStatus, PlayerCommand } from '../native/client';
 import type { RepeatMode } from '../native/bindings/RepeatMode';
-import { formatTime, isLive, isRemote, likeable } from '../features/playback';
+import {
+  formatTime,
+  isEpisode,
+  isLive,
+  isRemote,
+  likeable,
+  SKIP_MS,
+  skipTarget,
+} from '../features/playback';
 import { usePlaybackPosition } from '../features/usePlaybackPosition';
 // Spotify's own assets, shipped as the original files (never inlined, which rewrites the SVG
 // text). Design Guidelines; see THIRD_PARTY_NOTICES.md.
@@ -17,6 +25,8 @@ import {
   PreviousIcon,
   RepeatIcon,
   ShuffleIcon,
+  SkipBackIcon,
+  SkipForwardIcon,
 } from './playerIcons';
 
 const repeatLabel: Record<RepeatMode, 'Off' | 'All' | 'Song'> = {
@@ -89,6 +99,16 @@ function LivePlayer({
   const playDisabled = paused ? disallows.resume : disallows.pause;
   const spotifyUrl = nowPlaying?.spotifyUrl;
   const liked = nowPlaying?.liked === true;
+  // Podcasts skip 15 seconds where tracks have Previous and Next, through the same seek.
+  const episode = isEpisode(spotifyUrl);
+  const seekDisabled = disallows.seek || playback.durationMs === 0;
+
+  function skip(deltaMs: number): void {
+    onCommand({
+      op: 'seek',
+      positionMs: skipTarget(position, playback.durationMs, deltaMs),
+    });
+  }
 
   function commitSeek(): void {
     if (dragging === null) return;
@@ -164,7 +184,7 @@ function LivePlayer({
           max={playback.durationMs}
           step="1000"
           value={Math.min(shown, playback.durationMs)}
-          disabled={disallows.seek || playback.durationMs === 0}
+          disabled={seekDisabled}
           onChange={(event) => setDragging(Number(event.target.value))}
           onPointerUp={commitSeek}
           onKeyUp={commitSeek}
@@ -186,13 +206,23 @@ function LivePlayer({
           >
             <ShuffleIcon />
           </button>
-          <button
-            aria-label="Previous track"
-            disabled={disallows.previous}
-            onClick={() => onCommand({ op: 'previous' })}
-          >
-            <PreviousIcon />
-          </button>
+          {episode ? (
+            <button
+              aria-label="Back 15 seconds"
+              disabled={seekDisabled}
+              onClick={() => skip(-SKIP_MS)}
+            >
+              <SkipBackIcon />
+            </button>
+          ) : (
+            <button
+              aria-label="Previous track"
+              disabled={disallows.previous}
+              onClick={() => onCommand({ op: 'previous' })}
+            >
+              <PreviousIcon />
+            </button>
+          )}
           <button
             className="play-button"
             aria-label={paused ? 'Play' : 'Pause'}
@@ -201,13 +231,23 @@ function LivePlayer({
           >
             {paused ? <PlayIcon /> : <PauseIcon />}
           </button>
-          <button
-            aria-label="Next track"
-            disabled={disallows.next}
-            onClick={() => onCommand({ op: 'next' })}
-          >
-            <NextIcon />
-          </button>
+          {episode ? (
+            <button
+              aria-label="Forward 15 seconds"
+              disabled={seekDisabled}
+              onClick={() => skip(SKIP_MS)}
+            >
+              <SkipForwardIcon />
+            </button>
+          ) : (
+            <button
+              aria-label="Next track"
+              disabled={disallows.next}
+              onClick={() => onCommand({ op: 'next' })}
+            >
+              <NextIcon />
+            </button>
+          )}
           <button
             className={repeat !== 'Off' ? 'mode-active' : ''}
             aria-label={`Repeat: ${repeat}`}

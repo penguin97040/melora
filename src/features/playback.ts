@@ -34,6 +34,22 @@ export function likeable(spotifyUrl: string | null | undefined): boolean {
   return spotifyUrl?.startsWith('https://open.spotify.com/track/') === true;
 }
 
+/** Podcasts get 15-second skips in place of Previous and Next (Spotify's Design Guidelines). */
+export function isEpisode(spotifyUrl: string | null | undefined): boolean {
+  return spotifyUrl?.startsWith('https://open.spotify.com/episode/') === true;
+}
+
+export const SKIP_MS = 15_000;
+
+/** Where a skip of `deltaMs` lands, kept within the item. */
+export function skipTarget(
+  positionMs: number,
+  durationMs: number,
+  deltaMs: number,
+): number {
+  return Math.round(Math.min(durationMs, Math.max(0, positionMs + deltaMs)));
+}
+
 /** Something is active: Melora itself, or another device Melora controls. */
 export function isLive(status: PlaybackStatus): boolean {
   return status.tier === 'active' || status.device !== null;

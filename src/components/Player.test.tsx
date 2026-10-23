@@ -155,6 +155,88 @@ describe('player panel', () => {
     ).not.toBeInTheDocument();
   });
 
+  function episode(extra: Partial<PlaybackStatus> = {}): PlaybackStatus {
+    const playback = live({ paused: true, ...extra });
+    return {
+      ...playback,
+      nowPlaying: {
+        ...playback.nowPlaying!,
+        spotifyUrl: 'https://open.spotify.com/episode/x',
+      },
+    };
+  }
+
+  it('skips 15 seconds in place of Previous and Next for an episode', async () => {
+    const { onCommand } = renderPlayer(episode());
+    expect(
+      screen.queryByRole('button', { name: 'Previous track' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Next track' }),
+    ).not.toBeInTheDocument();
+    const buttons = screen
+      .getByRole('group', { name: 'Player controls' })
+      .querySelectorAll('button');
+    expect(
+      [...buttons].map((button) => button.getAttribute('aria-label')),
+    ).toEqual([
+      'Shuffle: Off',
+      'Back 15 seconds',
+      'Play',
+      'Forward 15 seconds',
+      'Repeat: Off',
+    ]);
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Back 15 seconds' }),
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Forward 15 seconds' }),
+    );
+    expect(onCommand.mock.calls.map(([command]) => command)).toEqual([
+      { op: 'seek', positionMs: 5_000 },
+      { op: 'seek', positionMs: 35_000 },
+    ]);
+  });
+
+  it('keeps an episode skip within the episode', async () => {
+    const { onCommand } = renderPlayer(episode({ positionMs: 4_000 }));
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Back 15 seconds' }),
+    );
+    expect(onCommand).toHaveBeenLastCalledWith({ op: 'seek', positionMs: 0 });
+  });
+
+  it('keeps a forward skip at the end of the episode', async () => {
+    const { onCommand } = renderPlayer(episode({ positionMs: 175_000 }));
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Forward 15 seconds' }),
+    );
+    expect(onCommand).toHaveBeenLastCalledWith({
+      op: 'seek',
+      positionMs: 180_000,
+    });
+  });
+
+  it('disables the episode skips when Spotify disallows seeking', () => {
+    renderPlayer(
+      episode({
+        disallows: {
+          pause: false,
+          resume: false,
+          next: false,
+          previous: false,
+          seek: true,
+        },
+      }),
+    );
+    expect(
+      screen.getByRole('button', { name: 'Back 15 seconds' }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Forward 15 seconds' }),
+    ).toBeDisabled();
+  });
+
   it('sends each control to Rust and reflects the real modes', async () => {
     const { onCommand } = renderPlayer(
       live({ shuffle: true, repeat: 'context' }),

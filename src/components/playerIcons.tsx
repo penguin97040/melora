@@ -40,6 +40,29 @@ export function NextIcon() {
   );
 }
 
+// The 15-second skips that replace Previous and Next while a podcast plays.
+export function SkipBackIcon() {
+  return (
+    <svg className="mode-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 4a8 8 0 1 1-8 8m10.5-10.5L12 4l2.5 2.5" />
+      <text className="skip-label" x="12" y="15.3">
+        15
+      </text>
+    </svg>
+  );
+}
+
+export function SkipForwardIcon() {
+  return (
+    <svg className="mode-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 4a8 8 0 1 0 8 8M9.5 1.5 12 4 9.5 6.5" />
+      <text className="skip-label" x="12" y="15.3">
+        15
+      </text>
+    </svg>
+  );
+}
+
 export function RepeatIcon({ one }: { one: boolean }) {
   return (
     <>

@@ -922,6 +922,14 @@ select {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.transport .skip-label {
+  fill: currentColor;
+  stroke: none;
+  font-family: var(--font-technical);
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+}
 @container shell (max-width: 53.125rem) {
   .workspace {
     grid-template-rows: auto minmax(0, 1fr);
