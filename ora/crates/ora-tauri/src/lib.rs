@@ -7,7 +7,10 @@ use ora_core::{
     browser::{self, Browser, SystemBrowser},
     http::ReqwestClient,
     store::KeyringStore,
-    types::{Device, Feature, OraError, PlaybackStatus, PlayerCommand, Profile, SdkEvent, Status},
+    types::{
+        Device, Feature, OraError, PlayRequest, PlaybackStatus, PlayerCommand, PlaylistPage,
+        Profile, SdkEvent, Status, TrackPage,
+    },
     Options, Ora,
 };
 use std::{
@@ -105,7 +108,11 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             list_devices,
             transfer_playback,
             refresh_liked,
-            toggle_liked
+            toggle_liked,
+            playlists,
+            playlist_tracks,
+            liked_tracks,
+            play
         ])
         .setup(move |app, _api| {
             let settings_dir =
@@ -383,6 +390,54 @@ async fn toggle_liked<R: Runtime>(
 ) -> Result<bool, OraError> {
     main_only(&window)?;
     ora.0.toggle_liked().await
+}
+
+/// One page of the account's playlists (`offset` from the previous page).
+#[tauri::command]
+async fn playlists<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    offset: u32,
+) -> Result<PlaylistPage, OraError> {
+    main_only(&window)?;
+    ora.0.playlists(offset).await
+}
+
+/// One page of a playlist's tracks and episodes.
+#[tauri::command]
+async fn playlist_tracks<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    id: String,
+    offset: u32,
+) -> Result<TrackPage, OraError> {
+    main_only(&window)?;
+    ora.0.playlist_tracks(&id, offset).await
+}
+
+/// One page of Liked Songs.
+#[tauri::command]
+async fn liked_tracks<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    offset: u32,
+) -> Result<TrackPage, OraError> {
+    main_only(&window)?;
+    ora.0.liked_tracks(offset).await
+}
+
+/// Plays from a list on the active device, or on this app's own. A refresh follows, so a
+/// remote device's new track shows.
+#[tauri::command]
+async fn play<R: Runtime>(
+    window: Window<R>,
+    ora: State<'_, Shared>,
+    request: PlayRequest,
+) -> Result<(), OraError> {
+    main_only(&window)?;
+    ora.0.play(request).await?;
+    reconcile(&ora.0);
+    Ok(())
 }
 
 /// Opens an `https://open.spotify.com/...` page in the system browser. Nothing else.

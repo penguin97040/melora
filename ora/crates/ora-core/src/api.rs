@@ -4,10 +4,12 @@
 use crate::{
     http::{HttpClient, Method, Request, Response, TransportError},
     link::SpotifyUri,
+    playback::{clip, MAX_ARTISTS, MAX_TEXT},
     secret::Secret,
 };
 use ora_types::{
-    DeviceKind, Disallows, ForbiddenHint, OraError, Profile, RepeatMode, SdkState, SdkTrack,
+    DeviceKind, Disallows, ForbiddenHint, OraError, PlaylistPage, PlaylistSummary, Profile,
+    RepeatMode, SdkState, SdkTrack, TrackPage, TrackRow,
 };
 use serde::Deserialize;
 
@@ -600,6 +602,246 @@ pub async fn player_state<H: HttpClient>(
         },
     }))
 }
+
+/// `PUT /me/player/play?device_id=…` from a request the caller validated: a playlist from a
+/// row, or a list of tracks and episodes.
+pub async fn play_from<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    device_id: &str,
+    start: &PlayStart,
+) -> Result<(), ApiError> {
+    let body = match start {
+        PlayStart::Context {
+            context,
+            position: Some(position),
+        } => {
+            serde_json::json!({ "context_uri": context.uri(), "offset": { "position": position } })
+        }
+        PlayStart::Context {
+            context,
+            position: None,
+        } => serde_json::json!({ "context_uri": context.uri() }),
+        PlayStart::Items(items) => {
+            serde_json::json!({ "uris": items.iter().map(SpotifyUri::uri).collect::<Vec<_>>() })
+        }
+    };
+    let url = format!("{API_BASE}/me/player/play?device_id={}", encode(device_id));
+    player_put(http, access, url, Some(body)).await
+}
+
+/// A validated `PlayRequest`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlayStart {
+    Context {
+        context: SpotifyUri,
+        position: Option<u32>,
+    },
+    Items(Vec<SpotifyUri>),
+}
+
+/// Page sizes: Spotify's maximum for these lists.
+pub const PAGE: u32 = 50;
+
+async fn get_json<H: HttpClient, T: serde::de::DeserializeOwned>(
+    http: &H,
+    access: &Secret,
+    url: String,
+    forbidden: ForbiddenHint,
+) -> Result<T, ApiError> {
+    let response = http
+        .send(Request {
+            method: Method::Get,
+            url,
+            bearer: Some(access.clone()),
+            form: Vec::new(),
+            json: None,
+        })
+        .await
+        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    if response.status != 200 {
+        return Err(error_for(&response, forbidden));
+    }
+    serde_json::from_slice(&response.body).map_err(|_| ApiError::Other(OraError::Network))
+}
+
+#[derive(Deserialize)]
+struct PageBody<T> {
+    #[serde(default = "Vec::new")]
+    items: Vec<Option<T>>,
+    #[serde(default)]
+    total: u32,
+    next: Option<String>,
+}
+
+impl<T> PageBody<T> {
+    /// Where the next page starts. An empty page never points further, so paging always ends.
+    fn next_offset(&self, offset: u32) -> Option<u32> {
+        let read = u32::try_from(self.items.len()).unwrap_or(u32::MAX);
+        (self.next.is_some() && read > 0)
+            .then(|| offset.saturating_add(read))
+            .filter(|next| *next < self.total)
+    }
+}
+
+#[derive(Deserialize)]
+struct PlaylistBody {
+    id: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    collaborative: bool,
+    owner: Option<OwnerBody>,
+    #[serde(default)]
+    images: Option<Vec<ImageBody>>,
+    /// Renamed from `tracks` in 2026; both are read.
+    items: Option<CountBody>,
+    tracks: Option<CountBody>,
+}
+
+#[derive(Deserialize)]
+struct OwnerBody {
+    id: Option<String>,
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CountBody {
+    #[serde(default)]
+    total: u32,
+}
+
+/// A playlist row (`item`, formerly `track`) or a saved track (`track`).
+#[derive(Deserialize)]
+struct EntryBody {
+    #[serde(default)]
+    is_local: bool,
+    item: Option<ItemBody>,
+    track: Option<ItemBody>,
+}
+
+/// `GET /me/playlists?limit=50&offset=…`. `me` is the account's Spotify ID, to tell which
+/// playlists Spotify lists the items of; without it, every playlist is assumed readable.
+pub async fn my_playlists<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    offset: u32,
+    me: Option<&str>,
+) -> Result<PlaylistPage, ApiError> {
+    let url = format!("{API_BASE}/me/playlists?limit={PAGE}&offset={offset}");
+    let body: PageBody<PlaylistBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    let next_offset = body.next_offset(offset);
+    let items = body
+        .items
+        .into_iter()
+        .flatten()
+        .filter_map(|playlist| {
+            let id = playlist.id.filter(|id| crate::link::is_base62_id(id))?;
+            let owner_id = playlist.owner.as_ref().and_then(|o| o.id.as_deref());
+            let readable = playlist.collaborative || me.is_none() || owner_id == me;
+            Some(PlaylistSummary {
+                spotify_url: format!("https://open.spotify.com/playlist/{id}"),
+                id,
+                name: clip(&playlist.name.unwrap_or_default(), MAX_TEXT),
+                owner: clip(
+                    &playlist
+                        .owner
+                        .and_then(|o| o.display_name)
+                        .unwrap_or_default(),
+                    MAX_TEXT,
+                ),
+                total: playlist.items.or(playlist.tracks).map_or(0, |c| c.total),
+                image_url: pick_image(playlist.images.unwrap_or_default()),
+                readable,
+            })
+        })
+        .collect();
+    Ok(PlaylistPage {
+        items,
+        total: body.total,
+        next_offset,
+    })
+}
+
+/// `GET /playlists/{id}/items?limit=50&offset=…`. Spotify refuses playlists the account
+/// neither owns nor collaborates on.
+pub async fn playlist_items<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    id: &str,
+    offset: u32,
+) -> Result<TrackPage, ApiError> {
+    let url = format!(
+        "{API_BASE}/playlists/{}/items?limit={PAGE}&offset={offset}&additional_types=episode",
+        encode(id)
+    );
+    let body: PageBody<EntryBody> =
+        get_json(http, access, url, ForbiddenHint::NotOwnerPlaylist).await?;
+    Ok(track_page(body, offset))
+}
+
+/// `GET /me/tracks?limit=50&offset=…`: Liked Songs, newest first.
+pub async fn saved_tracks<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    offset: u32,
+) -> Result<TrackPage, ApiError> {
+    let url = format!("{API_BASE}/me/tracks?limit={PAGE}&offset={offset}");
+    let body: PageBody<EntryBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
+    Ok(track_page(body, offset))
+}
+
+/// Rows keep their place in the whole list; entries Spotify sends as `null` are skipped.
+fn track_page(body: PageBody<EntryBody>, offset: u32) -> TrackPage {
+    let next_offset = body.next_offset(offset);
+    let items = body
+        .items
+        .into_iter()
+        .zip(offset..)
+        .filter_map(|(entry, position)| {
+            let entry = entry?;
+            let item = entry.item.or(entry.track)?;
+            Some(track_row(item, position, entry.is_local))
+        })
+        .collect();
+    TrackPage {
+        items,
+        total: body.total,
+        next_offset,
+    }
+}
+
+fn track_row(item: ItemBody, position: u32, local: bool) -> TrackRow {
+    let link = item
+        .uri
+        .as_deref()
+        .filter(|_| !local)
+        .and_then(crate::link::parse)
+        .filter(|uri| !uri.is_context());
+    let album = item
+        .album
+        .and_then(|album| album.name)
+        .or(item.show.and_then(|show| show.name))
+        .unwrap_or_default();
+    TrackRow {
+        position,
+        uri: link.as_ref().map(SpotifyUri::uri),
+        name: clip(&item.name.unwrap_or_default(), MAX_TEXT),
+        artists: item
+            .artists
+            .into_iter()
+            .filter_map(|artist| artist.name)
+            .take(MAX_ARTISTS)
+            .map(|artist| clip(&artist, MAX_TEXT))
+            .filter(|artist| !artist.is_empty())
+            .collect(),
+        album: clip(&album, MAX_TEXT),
+        duration_ms: item.duration_ms.min(MAX_DURATION_MS),
+        spotify_url: link.as_ref().map(SpotifyUri::page),
+    }
+}
+
+/// Nothing Melora lists is a day long; larger values are malformed.
+const MAX_DURATION_MS: u64 = 24 * 60 * 60 * 1000;
 
 fn encode(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()

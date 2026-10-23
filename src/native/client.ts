@@ -3,11 +3,17 @@ import { install } from '../../ora/sdk-bridge/sdk-bridge.js';
 import type { Bridge } from '../../ora/sdk-bridge/sdk-bridge.js';
 import type { Device } from './bindings/Device';
 import type { DeviceKind } from './bindings/DeviceKind';
+import type { Feature } from './bindings/Feature';
 import type { OraError } from './bindings/OraError';
 import type { PlaybackStatus } from './bindings/PlaybackStatus';
 import type { PlayerCommand } from './bindings/PlayerCommand';
+import type { PlayRequest } from './bindings/PlayRequest';
+import type { PlaylistPage } from './bindings/PlaylistPage';
+import type { PlaylistSummary } from './bindings/PlaylistSummary';
 import type { Profile } from './bindings/Profile';
 import type { Status } from './bindings/Status';
+import type { TrackPage } from './bindings/TrackPage';
+import type { TrackRow } from './bindings/TrackRow';
 
 export type {
   Device,
@@ -15,7 +21,12 @@ export type {
   OraError,
   PlaybackStatus,
   PlayerCommand,
+  PlayRequest,
+  PlaylistPage,
+  PlaylistSummary,
   Profile,
+  TrackPage,
+  TrackRow,
 };
 export type SpotifyStatus = Status;
 
@@ -39,7 +50,7 @@ export const defaultPreferences: Preferences = {
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
     return {
-      version: '0.5.1',
+      version: '0.5.2',
       platform: 'Browser preview',
       preferences: defaultPreferences,
       storageError: null,
@@ -126,6 +137,12 @@ export async function allowLibrary(): Promise<SpotifyStatus> {
   return invoke<SpotifyStatus>('plugin:ora|sign_in', {
     feature: 'LibrarySaveRemove',
   });
+}
+
+/** Signs in again, asking Spotify for the extra permission `feature` needs. */
+export async function allowFeature(feature: Feature): Promise<SpotifyStatus> {
+  requireDesktop();
+  return invoke<SpotifyStatus>('plugin:ora|sign_in', { feature });
 }
 
 export async function cancelSpotifySignIn(): Promise<SpotifyStatus> {
@@ -248,6 +265,35 @@ export async function refreshLiked(): Promise<void> {
 export async function toggleLiked(): Promise<boolean> {
   requireDesktop();
   return invoke<boolean>('plugin:ora|toggle_liked');
+}
+
+// The account's playlists and Liked Songs (Phase 6), read and cached in Rust.
+
+/** One page of the account's playlists; `offset` comes from the previous page. */
+export async function listPlaylists(offset: number): Promise<PlaylistPage> {
+  requireDesktop();
+  return invoke<PlaylistPage>('plugin:ora|playlists', { offset });
+}
+
+/** One page of a playlist's tracks and episodes. */
+export async function playlistTracks(
+  id: string,
+  offset: number,
+): Promise<TrackPage> {
+  requireDesktop();
+  return invoke<TrackPage>('plugin:ora|playlist_tracks', { id, offset });
+}
+
+/** One page of Liked Songs, newest first. */
+export async function likedTracks(offset: number): Promise<TrackPage> {
+  requireDesktop();
+  return invoke<TrackPage>('plugin:ora|liked_tracks', { offset });
+}
+
+/** Plays from a list on the active device, or on Melora's own. */
+export async function playFromList(request: PlayRequest): Promise<void> {
+  requireDesktop();
+  return invoke<void>('plugin:ora|play', { request });
 }
 
 export type WindowChrome = 'custom' | 'macos' | 'preview';

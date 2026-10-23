@@ -37,13 +37,14 @@ export const featureUi = {
   Queue: phase('Queue', 6),
   AddToQueue: phase('Add to queue', 6),
   Search: phase('Search', 6),
-  SavedTracks: phase('Liked Songs', 6),
+  // The sidebar's Liked Songs and playlists, and their tracks in the centre (Phase 6a).
+  SavedTracks: { kind: 'wired', label: 'Liked Songs' },
   SavedAlbums: phase('Saved albums', 6),
   SavedShowsEpisodes: phase('Saved shows and episodes', 6),
   // The player's + (Liked Songs) for the track playing now; library views arrive in Phase 6.
   LibrarySaveRemove: { kind: 'wired', label: 'Save to library' },
-  Playlists: phase('Playlists', 6),
-  PlaylistDetail: phase('Playlist detail', 6),
+  Playlists: { kind: 'wired', label: 'Your playlists' },
+  PlaylistDetail: { kind: 'wired', label: 'Playlist tracks' },
   PlaylistEdit: phase('Edit playlists', 6),
   CreatePlaylist: phase('Create playlist', 6),
   RecentlyPlayed: phase('Recently played', 6),

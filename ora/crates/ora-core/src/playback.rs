@@ -12,7 +12,7 @@
 //!   Web API state is fetched only on events, on focus and at a low rate.
 
 use crate::{
-    api::{self, is_allowed_image, ApiDevice, PlayerState},
+    api::{self, is_allowed_image, ApiDevice, PlayStart, PlayerState},
     browser::Browser,
     http::HttpClient,
     link::{self, Kind, SpotifyUri},
@@ -21,7 +21,7 @@ use crate::{
     Ora,
 };
 use ora_types::{
-    Device, DeviceKind, Feature, ForbiddenHint, NowPlaying, OraError, PlaybackIssue,
+    Device, DeviceKind, Feature, ForbiddenHint, NowPlaying, OraError, PlayRequest, PlaybackIssue,
     PlaybackStatus, PlayerCommand, Probe, SdkErrorKind, SdkEvent, SdkState, Tier,
 };
 use sha2::{Digest, Sha256};
@@ -32,8 +32,8 @@ use std::{
 };
 use tokio::sync::watch;
 
-const MAX_TEXT: usize = 300;
-const MAX_ARTISTS: usize = 20;
+pub(crate) const MAX_TEXT: usize = 300;
+pub(crate) const MAX_ARTISTS: usize = 20;
 const MAX_CSP_BLOCKS: usize = 10;
 const MAX_DEVICE_NAME: usize = 100;
 /// Spotify runs player commands asynchronously, so the follow-up read waits this long.
@@ -532,12 +532,39 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         )
         .await?;
         self.playback().set_liked(&item, !liked);
+        self.library().forget_liked();
         Ok(!liked)
     }
 
     async fn library_contains(&self, item: &SpotifyUri) -> Result<bool, OraError> {
         let http = self.http();
         self.authorised(|access| async move { api::library_contains(http, &access, item).await })
+            .await
+    }
+
+    /// Plays from a list: on the active device, or on this app's own device when nothing else
+    /// is playing. With neither, the UI asks for a device to be chosen.
+    pub async fn play(&self, request: PlayRequest) -> Result<(), OraError> {
+        let start = play_start(request)?;
+        let device = match self.playback().remote_target() {
+            Some(target) => {
+                self.require(Feature::ConnectControl)?;
+                if target.restricted {
+                    return Err(OraError::Forbidden {
+                        hint: ForbiddenHint::Restricted,
+                    });
+                }
+                target.id
+            }
+            None => {
+                self.require(Feature::EmbeddedPlayback)?;
+                self.playback()
+                    .device_id()
+                    .ok_or(OraError::NoActiveDevice)?
+            }
+        };
+        let (http, device, start) = (self.http(), device.as_str(), &start);
+        self.authorised(|access| async move { api::play_from(http, &access, device, start).await })
             .await
     }
 
@@ -569,6 +596,31 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 )
                 .await
             }
+        }
+    }
+}
+
+/// Spotify accepts long `uris` lists, but a click never needs more than a page or two.
+const MAX_PLAY_ITEMS: usize = 100;
+
+/// Checks a `PlayRequest` from the UI: a playlist or album, or tracks and episodes.
+fn play_start(request: PlayRequest) -> Result<PlayStart, OraError> {
+    match request {
+        PlayRequest::Context { uri, position } => {
+            let context = link::parse(&uri)
+                .filter(|uri| matches!(uri.kind, Kind::Playlist | Kind::Album))
+                .ok_or(OraError::InvalidSpotifyLink)?;
+            Ok(PlayStart::Context { context, position })
+        }
+        PlayRequest::Items { uris } => {
+            if uris.is_empty() || uris.len() > MAX_PLAY_ITEMS {
+                return Err(OraError::Unsupported);
+            }
+            uris.iter()
+                .map(|uri| link::parse(uri).filter(|uri| !uri.is_context()))
+                .collect::<Option<Vec<_>>>()
+                .map(PlayStart::Items)
+                .ok_or(OraError::InvalidSpotifyLink)
         }
     }
 }
@@ -667,7 +719,7 @@ fn now_ms() -> u64 {
 }
 
 /// At most `max` characters, without control characters.
-fn clip(text: &str, max: usize) -> String {
+pub(crate) fn clip(text: &str, max: usize) -> String {
     text.chars()
         .filter(|c| !c.is_control())
         .take(max)

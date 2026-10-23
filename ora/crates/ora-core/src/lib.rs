@@ -3,9 +3,11 @@
 
 pub mod api;
 pub mod browser;
+pub mod cache;
 pub mod config;
 pub mod fsio;
 pub mod http;
+pub mod library;
 pub mod link;
 pub mod loopback;
 pub mod oauth;

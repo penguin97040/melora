@@ -29,6 +29,8 @@ export function describeError(
           return 'Spotify refused: controlling playback needs Spotify Premium.';
         case 'Restricted':
           return 'Spotify doesn’t allow controlling this device from other apps.';
+        case 'NotOwnerPlaylist':
+          return 'Spotify only shows the tracks of playlists you own or collaborate on. Open it in Spotify to see the full playlist.';
         default:
           return 'Spotify refused this request.';
       }

@@ -15,6 +15,7 @@ use crate::{
     browser::{self, Browser},
     config::{ClientId, ConfigStore},
     http::HttpClient,
+    library::Library,
     loopback::{registered_redirect_uri, Callback, CallbackError},
     oauth::{self, TokenError},
     pkce,
@@ -96,6 +97,7 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
     store_gate: tokio::sync::Mutex<()>,
     status: watch::Sender<Status>,
     playback: Playback,
+    library: Library,
 }
 
 impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
@@ -129,6 +131,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             store_gate: tokio::sync::Mutex::new(()),
             status,
             playback: Playback::default(),
+            library: Library::default(),
         }
     }
 
@@ -139,6 +142,27 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 
     pub(crate) fn http(&self) -> &H {
         &self.http
+    }
+
+    pub(crate) fn library(&self) -> &Library {
+        &self.library
+    }
+
+    /// The signed-in account's Spotify ID, once the profile has loaded.
+    pub(crate) fn account(&self) -> Option<String> {
+        match &self.lock().auth {
+            Auth::SignedIn(session) => session.profile.as_ref().map(|p| p.id.clone()),
+            _ => None,
+        }
+    }
+
+    /// Cached reads belong to this sign-in of this account (see `cache`).
+    pub(crate) fn cache_scope(&self) -> String {
+        format!(
+            "{}:{}",
+            self.current_generation(),
+            self.account().unwrap_or_default()
+        )
     }
 
     pub fn status(&self) -> Status {

@@ -3,8 +3,19 @@ import { DevicePicker } from './components/DevicePicker';
 import { PlaybackTest } from './components/PlaybackTest';
 import { Player } from './components/Player';
 import { SpotifyAccount } from './components/SpotifyAccount';
+import { SpotifyList } from './components/SpotifyList';
+import { SpotifyPlaylists } from './components/SpotifyPlaylists';
 import { WindowHeader } from './components/WindowHeader';
 import { accountName, profileRetryable } from './features/account';
+import {
+  fetchPlaylists,
+  fetchTracks,
+  granted,
+  playRequestFor,
+  sourceKey,
+  usePaged,
+} from './features/library';
+import type { ListSource } from './features/library';
 import {
   deviceControlAllowed,
   isRemote,
@@ -13,6 +24,8 @@ import {
   playbackAllowed,
 } from './features/playback';
 import {
+  activatePlayback,
+  allowFeature,
   allowLibrary,
   defaultPreferences,
   enablePlayback,
@@ -21,6 +34,7 @@ import {
   hasNativeStorage,
   loadSpotifyProfile,
   openInSpotify,
+  playFromList,
   refreshLiked,
   refreshPlayback,
   savePreferences,
@@ -34,10 +48,13 @@ import type {
   AppInfo,
   PlaybackStatus,
   PlayerCommand,
+  PlayRequest,
   Preferences,
   SpotifyStatus,
+  TrackRow,
   WindowChrome,
 } from './native/client';
+import type { Feature } from './native/bindings/Feature';
 import { describeFailure } from './features/account';
 import { previewPlaylists, previewTracks } from './preview';
 
@@ -77,6 +94,9 @@ function quietly(action: () => Promise<unknown>): void {
 export default function App() {
   const [view, setView] = useState<View>('Library');
   const [playlist, setPlaylist] = useState(0);
+  // A Spotify list chosen in the sidebar; `null` shows the preview playlist.
+  const [source, setSource] = useState<ListSource | null>(null);
+  const [playMessage, setPlayMessage] = useState<string | null>(null);
   const [selected, setSelected] = useState(initialTrack);
   const [query, setQuery] = useState('');
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -287,6 +307,49 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [likeMessage]);
 
+  const profile =
+    spotify?.auth.kind === 'signedIn' ? spotify.auth.profile : null;
+  const showPlaylists = granted(spotify, 'Playlists');
+  const playlists = usePaged(
+    showPlaylists ? `playlists:${profile?.id ?? ''}` : null,
+    fetchPlaylists,
+  );
+  // Signing out, or a sign-in without the permission, goes back to the preview.
+  const shown = showPlaylists ? source : null;
+  const list = usePaged(
+    shown && (shown.kind === 'liked' || shown.playlist.readable)
+      ? sourceKey(shown)
+      : null,
+    fetchTracks,
+  );
+
+  function chooseList(next: ListSource | null): void {
+    setSource(next);
+    setPlayMessage(null);
+    setView('Library');
+  }
+
+  /** Must run inside the click, so Melora's own player may start audio. */
+  function playFrom(request: PlayRequest): void {
+    activatePlayback();
+    void playFromList(request).then(
+      () => setPlayMessage(null),
+      (error: unknown) => setPlayMessage(describeFailure(error)),
+    );
+  }
+
+  function playRow(row: TrackRow): void {
+    if (shown) playFrom(playRequestFor(shown, list.items, row));
+  }
+
+  /** Signs in again with the permission `feature` needs, then loads the list again. */
+  function allow(feature: Feature): void {
+    void allowFeature(feature).then(
+      () => list.retry(),
+      (error: unknown) => setWindowMessage(describeFailure(error)),
+    );
+  }
+
   /** The + control. The first use asks Spotify for library access, then carries on. */
   function toggleLike(): void {
     void (async () => {
@@ -347,8 +410,7 @@ export default function App() {
       : !activePlaylist.artist || track.artist === activePlaylist.artist,
   );
   const artistCount = new Set(tracks.map((track) => track.artist)).size;
-  const profile =
-    spotify?.auth.kind === 'signedIn' ? spotify.auth.profile : null;
+  const fromSpotify = view === 'Library' && shown !== null;
 
   return (
     <div
@@ -392,41 +454,62 @@ export default function App() {
               )}
             </p>
           </nav>
-          <section className="playlists" aria-label="Preview playlists">
-            <div className="panel-label">
-              <span>Playlists</span>
-              <span>04</span>
-            </div>
-            <div className="playlist-items">
-              {previewPlaylists.map((item, i) => (
-                <button
-                  key={item.name}
-                  className={`playlist-item ${playlist === i ? 'selected' : ''}`}
-                  aria-pressed={playlist === i}
-                  onClick={() => {
-                    setPlaylist(i);
-                    setView('Library');
-                  }}
-                >
-                  <span className="playlist-icon">▤</span>
-                  <span>
-                    <span className="playlist-name">{item.name}</span>
-                    <span className="playlist-subtitle">{item.subtitle}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <p className="sidebar-footnote">
-              A local design preview.
-              <br />
-              No account required.
-            </p>
-          </section>
+          {showPlaylists ? (
+            <SpotifyPlaylists
+              playlists={playlists}
+              selected={shown ? sourceKey(shown) : null}
+              onSelect={chooseList}
+            />
+          ) : (
+            <section className="playlists" aria-label="Preview playlists">
+              <div className="panel-label">
+                <span>Playlists</span>
+                <span>04</span>
+              </div>
+              <div className="playlist-items">
+                {previewPlaylists.map((item, i) => (
+                  <button
+                    key={item.name}
+                    className={`playlist-item ${playlist === i ? 'selected' : ''}`}
+                    aria-pressed={playlist === i}
+                    onClick={() => {
+                      setPlaylist(i);
+                      chooseList(null);
+                    }}
+                  >
+                    <span className="playlist-icon">▤</span>
+                    <span>
+                      <span className="playlist-name">{item.name}</span>
+                      <span className="playlist-subtitle">{item.subtitle}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {spotify?.auth.kind === 'signedIn' ? (
+                <p className="sidebar-footnote">
+                  A local design preview.
+                  <br />
+                  <button
+                    className="link-button"
+                    onClick={() => allow('Playlists')}
+                  >
+                    Show my Spotify playlists
+                  </button>
+                </p>
+              ) : (
+                <p className="sidebar-footnote">
+                  A local design preview.
+                  <br />
+                  No account required.
+                </p>
+              )}
+            </section>
+          )}
         </aside>
         <main id="content" className="content panel" tabIndex={-1}>
           <div className="panel-label">
             <span>{view}</span>
-            <span>Local / preview</span>
+            <span>{fromSpotify ? 'From Spotify' : 'Local / preview'}</span>
           </div>
           {windowMessage && (
             <p className="error-message" role="alert">
@@ -436,6 +519,11 @@ export default function App() {
           {storageMessage && (
             <p className="error-message" role="alert">
               {storageMessage}
+            </p>
+          )}
+          {fromSpotify && playMessage && (
+            <p className="error-message" role="alert">
+              {playMessage}
             </p>
           )}
           {view === 'Settings' ? (
@@ -505,6 +593,23 @@ export default function App() {
                 />
               )}
             </section>
+          ) : fromSpotify && shown ? (
+            <SpotifyList
+              source={shown}
+              list={list}
+              playingUrl={nowUrl}
+              onPlay={playRow}
+              onPlayAll={() =>
+                shown.kind === 'playlist' &&
+                playFrom({
+                  kind: 'context',
+                  uri: `spotify:playlist:${shown.playlist.id}`,
+                  position: null,
+                })
+              }
+              onOpen={openSpotifyPage}
+              onAllow={allow}
+            />
           ) : (
             <>
               <section className="collection-heading">
@@ -621,7 +726,7 @@ export default function App() {
       <footer className="status-strip">
         <span>
           <span className="status-dot" />
-          Synthetic preview
+          {fromSpotify ? 'From Spotify' : 'Synthetic preview'}
         </span>
         {profile && (
           <span className="account-chip">

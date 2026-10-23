@@ -1243,3 +1243,312 @@ async fn shuffle_and_repeat_run_through_the_web_api_and_the_rest_go_to_the_sdk()
     );
     assert_eq!(h.http.requests().len() - before, 2);
 }
+
+const LIBRARY_SCOPES: &str = "playlist-read-private playlist-read-collaborative user-library-read";
+
+/// Signed in with playback, playlists and Liked Songs allowed, and Melora's device ready.
+async fn library_ready(label: &str) -> Harness {
+    let h = playback_ready(label).await;
+    let scopes = format!("{PLAYBACK_SCOPES} {LIBRARY_SCOPES}");
+    h.http
+        .push(200, &tokens_with_scope("acc2", Some("ref2"), &scopes));
+    h.http.push(200, ME);
+    h.ora.sign_in(Some(Feature::Playlists)).await.unwrap();
+    h
+}
+
+const PLAYLISTS: &str = r#"{"href":"x","limit":50,"offset":0,"previous":null,"total":120,
+    "next":"https://api.spotify.com/v1/me/playlists?offset=50&limit=50","items":[
+    {"id":"PlAyLiSt0123456789abcd","name":"Mine","collaborative":false,
+     "owner":{"id":"user1","display_name":"Kiri"},"items":{"total":12},
+     "images":[{"url":"https://i.scdn.co/image/big","width":640},
+               {"url":"https://i.scdn.co/image/mid","width":300}]},
+    {"id":"OtHeRs0123456789abcdef","name":"Theirs\u0007","collaborative":false,
+     "owner":{"id":"someone","display_name":null},"tracks":{"total":7},"images":null},
+    {"id":"short","name":"Bad ID"},
+    null]}"#;
+
+#[tokio::test]
+async fn playlists_are_paged_cached_and_say_which_spotify_lists() {
+    let h = library_ready("playlists").await;
+    let before = h.http.requests().len();
+    h.http.push(200, PLAYLISTS);
+    let page = h.ora.playlists(0).await.unwrap();
+    assert_eq!((page.total, page.next_offset), (120, Some(4)));
+    let [mine, theirs] = page.items.as_slice() else {
+        panic!("{page:?}");
+    };
+    assert_eq!(
+        (
+            mine.name.as_str(),
+            mine.owner.as_str(),
+            mine.total,
+            mine.readable
+        ),
+        ("Mine", "Kiri", 12, true)
+    );
+    assert_eq!(
+        mine.image_url.as_deref(),
+        Some("https://i.scdn.co/image/mid")
+    );
+    assert_eq!(
+        mine.spotify_url,
+        "https://open.spotify.com/playlist/PlAyLiSt0123456789abcd"
+    );
+    // The old `tracks` count still counts; control characters go.
+    assert_eq!(
+        (
+            theirs.name.as_str(),
+            theirs.owner.as_str(),
+            theirs.total,
+            theirs.readable
+        ),
+        ("Theirs", "", 7, false)
+    );
+
+    // A second read within five minutes is answered from memory.
+    assert_eq!(h.ora.playlists(0).await.unwrap(), page);
+    let seen = h.http.requests();
+    assert_eq!(seen.len() - before, 1);
+    assert_eq!(
+        seen[before].url,
+        "https://api.spotify.com/v1/me/playlists?limit=50&offset=0"
+    );
+    // The next page starts after the rows this one had; offsets past Spotify's limit are
+    // refused before a request.
+    h.http
+        .push(200, &PLAYLISTS.replace(r#""offset":0"#, r#""offset":4"#));
+    h.ora.playlists(4).await.unwrap();
+    assert_eq!(
+        h.http.requests().last().unwrap().url,
+        "https://api.spotify.com/v1/me/playlists?limit=50&offset=4"
+    );
+    let count = h.http.requests().len();
+    assert_eq!(h.ora.playlists(100_001).await, Err(OraError::Unsupported));
+    assert_eq!(h.http.requests().len(), count);
+}
+
+const ITEMS: &str = r#"{"href":"x","limit":50,"offset":50,"previous":null,"next":null,
+    "total":54,"items":[
+    {"is_local":false,"item":{"type":"track","uri":"spotify:track:AbCd0123456789xyzXYZ01",
+     "name":"Song","duration_ms":200000,"artists":[{"name":"A"},{"name":"B"}],
+     "album":{"name":"Album","images":[]}}},
+    null,
+    {"is_local":false,"track":{"type":"episode","uri":"spotify:episode:EpIs0123456789xyzXYZ01",
+     "name":"Episode","duration_ms":3600000,"show":{"name":"Show","images":[]}}},
+    {"is_local":true,"item":{"type":"track","uri":"spotify:local:A:B:Home+made:120",
+     "name":"Home made","duration_ms":120000,"artists":[{"name":"Me"}],"album":{"name":"B"}}}]}"#;
+
+#[tokio::test]
+async fn playlist_rows_keep_their_place_and_unplayable_ones_say_so() {
+    let h = library_ready("playlist-items").await;
+    let before = h.http.requests().len();
+    h.http.push(200, ITEMS);
+    let page = h
+        .ora
+        .playlist_tracks("PlAyLiSt0123456789abcd", 50)
+        .await
+        .unwrap();
+    assert_eq!((page.total, page.next_offset), (54, None));
+    let rows: Vec<_> = page
+        .items
+        .iter()
+        .map(|row| {
+            (
+                row.position,
+                row.uri.as_deref(),
+                row.name.as_str(),
+                row.album.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                50,
+                Some("spotify:track:AbCd0123456789xyzXYZ01"),
+                "Song",
+                "Album"
+            ),
+            (
+                52,
+                Some("spotify:episode:EpIs0123456789xyzXYZ01"),
+                "Episode",
+                "Show"
+            ),
+            (53, None, "Home made", "B"),
+        ]
+    );
+    assert_eq!(page.items[0].artists, ["A", "B"]);
+    assert_eq!(
+        page.items[0].spotify_url.as_deref(),
+        Some("https://open.spotify.com/track/AbCd0123456789xyzXYZ01")
+    );
+    assert_eq!(page.items[2].spotify_url, None);
+    assert_eq!(
+        h.http.requests()[before].url,
+        "https://api.spotify.com/v1/playlists/PlAyLiSt0123456789abcd/items\
+         ?limit=50&offset=50&additional_types=episode"
+    );
+
+    // Someone else's playlist: Spotify refuses its items, and the UI says why.
+    h.http
+        .push(403, r#"{"error":{"status":403,"message":"Forbidden"}}"#);
+    assert_eq!(
+        h.ora.playlist_tracks("OtHeRs0123456789abcdef", 0).await,
+        Err(OraError::Forbidden {
+            hint: ForbiddenHint::NotOwnerPlaylist
+        })
+    );
+    // The refusal isn't remembered, and malformed IDs never reach Spotify.
+    let count = h.http.requests().len();
+    assert_eq!(
+        h.ora.playlist_tracks("../me", 0).await,
+        Err(OraError::Unsupported)
+    );
+    assert_eq!(h.http.requests().len(), count);
+}
+
+#[tokio::test]
+async fn liked_songs_are_cached_until_the_plus_changes_them() {
+    let h = library_ready("liked-list").await;
+    let liked = r#"{"href":"x","limit":50,"offset":0,"previous":null,"next":null,"total":1,
+        "items":[{"added_at":"2026-10-23T00:00:00Z","track":{"type":"track",
+        "uri":"spotify:track:AbCd0123456789xyzXYZ01","name":"Song","duration_ms":1000,
+        "artists":[{"name":"A"}],"album":{"name":"B"}}}]}"#;
+    let before = h.http.requests().len();
+    h.http.push(200, liked);
+    let page = h.ora.liked_tracks(0).await.unwrap();
+    assert_eq!(
+        page.items[0].uri.as_deref(),
+        Some("spotify:track:AbCd0123456789xyzXYZ01")
+    );
+    assert_eq!(h.ora.liked_tracks(0).await.unwrap(), page);
+    assert_eq!(
+        h.http.requests()[before].url,
+        "https://api.spotify.com/v1/me/tracks?limit=50&offset=0"
+    );
+    assert_eq!(h.http.requests().len() - before, 1);
+    h.ora.library().forget_liked();
+    h.http.push(200, liked);
+    h.ora.liked_tracks(0).await.unwrap();
+    assert_eq!(h.http.requests().len() - before, 2);
+}
+
+#[tokio::test]
+async fn lists_need_their_permission() {
+    let h = playback_ready("library-scope").await;
+    let before = h.http.requests().len();
+    let needs = |feature| Some(OraError::NeedsScope { feature });
+    assert_eq!(h.ora.playlists(0).await.err(), needs(Feature::Playlists));
+    assert_eq!(
+        h.ora
+            .playlist_tracks("PlAyLiSt0123456789abcd", 0)
+            .await
+            .err(),
+        needs(Feature::PlaylistDetail)
+    );
+    assert_eq!(
+        h.ora.liked_tracks(0).await.err(),
+        needs(Feature::SavedTracks)
+    );
+    assert_eq!(h.http.requests().len(), before);
+}
+
+#[tokio::test]
+async fn a_click_plays_on_melora_or_on_the_active_device() {
+    use ora_types::PlayRequest;
+    let h = library_ready("play-from-list").await;
+    let before = h.http.requests().len();
+    h.http.push(204, "");
+    h.ora
+        .play(PlayRequest::Context {
+            uri: "spotify:playlist:PlAyLiSt0123456789abcd".into(),
+            position: Some(52),
+        })
+        .await
+        .unwrap();
+    // Another device is active: it plays there instead.
+    h.http.push(200, REMOTE_STATE);
+    h.ora.refresh_playback().await.unwrap();
+    h.http.push(204, "");
+    h.ora
+        .play(PlayRequest::Items {
+            uris: vec![
+                "spotify:track:AbCd0123456789xyzXYZ01".into(),
+                "spotify:episode:EpIs0123456789xyzXYZ01".into(),
+            ],
+        })
+        .await
+        .unwrap();
+    let sent: Vec<(String, Option<serde_json::Value>)> = h.http.requests()[before..]
+        .iter()
+        .filter(|r| r.method == Method::Put)
+        .map(|r| (r.url.clone(), r.json.clone()))
+        .collect();
+    let play = "https://api.spotify.com/v1/me/player/play?device_id=";
+    assert_eq!(
+        sent,
+        [
+            (
+                format!("{play}device1"),
+                Some(serde_json::json!({
+                    "context_uri": "spotify:playlist:PlAyLiSt0123456789abcd",
+                    "offset": {"position": 52}
+                }))
+            ),
+            (
+                format!("{play}phone1"),
+                Some(serde_json::json!({"uris": [
+                    "spotify:track:AbCd0123456789xyzXYZ01",
+                    "spotify:episode:EpIs0123456789xyzXYZ01"
+                ]}))
+            ),
+        ]
+    );
+
+    // Requests the UI shouldn't send are refused before reaching Spotify.
+    let count = h.http.requests().len();
+    let refused = [
+        (
+            PlayRequest::Context {
+                uri: "spotify:track:AbCd0123456789xyzXYZ01".into(),
+                position: None,
+            },
+            OraError::InvalidSpotifyLink,
+        ),
+        (
+            PlayRequest::Items {
+                uris: vec!["spotify:playlist:PlAyLiSt0123456789abcd".into()],
+            },
+            OraError::InvalidSpotifyLink,
+        ),
+        (
+            PlayRequest::Items { uris: Vec::new() },
+            OraError::Unsupported,
+        ),
+        (
+            PlayRequest::Items {
+                uris: vec!["spotify:track:AbCd0123456789xyzXYZ01".into(); 101],
+            },
+            OraError::Unsupported,
+        ),
+    ];
+    for (request, error) in refused {
+        assert_eq!(h.ora.play(request).await, Err(error));
+    }
+    assert_eq!(h.http.requests().len(), count);
+
+    // With no device at all, the UI is told to choose one.
+    h.ora.playback().reset();
+    assert_eq!(
+        h.ora
+            .play(PlayRequest::Context {
+                uri: "spotify:playlist:PlAyLiSt0123456789abcd".into(),
+                position: None,
+            })
+            .await,
+        Err(OraError::NoActiveDevice)
+    );
+}
