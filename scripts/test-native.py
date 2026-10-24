@@ -39,8 +39,9 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
     driver = subprocess.Popen(['xvfb-run', '-a', '-s', f'-screen 0 {args.screen}x24', 'env', 'TAURI_WEBVIEW_AUTOMATION=true',
                                f'GDK_SCALE={args.device_scale}',
                                'WEBKIT_DISABLE_COMPOSITING_MODE=1', 'XDG_DATA_HOME=' + data,
-                               'python3', '-c',
-                               "import os,sys,json,subprocess;from pathlib import Path;Path(sys.argv[1]).write_text(json.dumps({key:os.environ[key] for key in ['DISPLAY','XAUTHORITY']}));subprocess.Popen(['openbox'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) if sys.argv[3]=='chrome' else None;os.execvp('WebKitWebDriver',['WebKitWebDriver','--port='+sys.argv[2]])",
+                               # A private session bus, for the media controls (MPRIS).
+                               'dbus-run-session', '--', 'python3', '-c',
+                               "import os,sys,json,subprocess;from pathlib import Path;Path(sys.argv[1]).write_text(json.dumps({key:os.environ[key] for key in ['DISPLAY','XAUTHORITY','DBUS_SESSION_BUS_ADDRESS']}));subprocess.Popen(['openbox'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) if sys.argv[3]=='chrome' else None;os.execvp('WebKitWebDriver',['WebKitWebDriver','--port='+sys.argv[2]])",
                                str(Path(data) / 'display'), str(port), 'chrome' if args.chrome_only else 'plain'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     base = f'http://127.0.0.1:{port}'
     session = None
@@ -597,6 +598,58 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                                'noSynthetic': True, 'plainArtwork': True, 'fits': True,
                                'deviceLine': 'Melora (this app) · Choose device',
                                'device': 'Playback device: This app'}, f'Live player wrong: {live_player}'
+        # Media keys (Phase 7): Melora's MPRIS entry on the private session bus shows the synthetic track,
+        # and its keys send what the player's buttons would, to a test command channel.
+        bus = json.loads((Path(data) / 'display').read_text())['DBUS_SESSION_BUS_ADDRESS']
+        mpris_name, mpris_path = 'org.mpris.MediaPlayer2.melora', '/org/mpris/MediaPlayer2'
+        def busctl(*command):
+            return subprocess.run(['busctl', '--address=' + bus, '--json=short', *command],
+                                  check=True, capture_output=True, text=True, timeout=10).stdout
+        def mpris_property(name, interface='org.mpris.MediaPlayer2.Player'):
+            return json.loads(busctl('get-property', mpris_name, mpris_path, interface, name))['data']
+        def mpris_press(method):
+            busctl('call', mpris_name, mpris_path, 'org.mpris.MediaPlayer2.Player', method)
+        def media_state():
+            metadata = mpris_property('Metadata')
+            value = lambda key: metadata.get(key, {}).get('data')
+            return {'status': mpris_property('PlaybackStatus'), 'title': value('xesam:title'),
+                    'artists': value('xesam:artist'), 'length': value('mpris:length'), 'track': value('mpris:trackid'),
+                    'next': mpris_property('CanGoNext'), 'previous': mpris_property('CanGoPrevious'),
+                    'pause': mpris_property('CanPause'), 'seek': mpris_property('CanSeek')}
+        def wait_media(expected):
+            state = None
+            for _ in range(80):
+                try:
+                    state = media_state()
+                    if all(state[key] == value for key, value in expected.items()):
+                        return state
+                except subprocess.CalledProcessError as error:
+                    state = error.stderr.strip()
+                time.sleep(0.1)
+            raise AssertionError(f'Media controls wrong: {state}')
+        def media_commands(count):
+            wait_script(f'return (window.__mediaCommands || []).length >= {count};')
+            time.sleep(0.3)
+            return execute('return window.__mediaCommands;')
+        execute("""
+            window.__mediaCommands = [];
+            const id = window.__TAURI_INTERNALS__.transformCallback(raw => {
+                if ('message' in raw) window.__mediaCommands.push(raw.message);
+            });
+            window.__mediaAttached = false;
+            window.__TAURI_INTERNALS__.invoke('plugin:ora|sdk_attach', {onCommand: '__CHANNEL__:' + id})
+                .then(() => { window.__mediaAttached = true; });
+        """)
+        wait_script('return window.__mediaAttached;')
+        track_media = wait_media({'status': 'Playing', 'title': 'Native test track'})
+        assert track_media == {'status': 'Playing', 'title': 'Native test track', 'artists': ['Test Artist'],
+                               'length': 200_000_000, 'track': '/app/melora/item/AbCd0123456789xyzXYZ01',
+                               'next': False, 'previous': True, 'pause': True, 'seek': True}, f'MPRIS track wrong: {track_media}'
+        assert mpris_property('Identity', 'org.mpris.MediaPlayer2') == 'Melora', 'MPRIS identity wrong'
+        for method in ('PlayPause', 'Next', 'Previous'):
+            mpris_press(method)
+        track_keys = media_commands(2)
+        assert track_keys == [{'op': 'togglePlay'}, {'op': 'previous'}], f'Media keys sent the wrong commands (Next is disallowed): {track_keys}'
         # Phase 5 (gate G4): the official logo in the header and the + ending the title line.
         wait_script("return [...document.querySelectorAll('.player img')].every(i => i.complete && i.naturalWidth > 0);")
         brand = execute("""
@@ -656,6 +709,13 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert [box[0] for box in episode_boxes] == ['Shuffle: Off', 'Back 15 seconds', 'Play', 'Forward 15 seconds', 'Repeat: Off'], f'Podcast row wrong: {episode_boxes}'
         moved = [(a, b) for a, b in zip(track_boxes, episode_boxes) if any(abs(x - y) > 0.5 for x, y in zip(a[1:], b[1:]))]
         assert not moved, f'Podcast skips moved the controls: {moved}'
+        episode_media = wait_media({'status': 'Paused', 'title': 'Native test episode'})
+        assert (episode_media['next'], episode_media['previous'], episode_media['length']) == (True, True, 1_800_000_000), f'MPRIS episode wrong: {episode_media}'
+        execute('window.__mediaCommands = [];')
+        for method in ('Next', 'Previous'):
+            mpris_press(method)
+        episode_keys = media_commands(2)
+        assert episode_keys == [{'op': 'seek', 'positionMs': 75000}, {'op': 'seek', 'positionMs': 45000}], f'Episode keys should skip 15 seconds: {episode_keys}'
         (output / 'melora-linux-podcast-skip.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         execute("""
             window.__liveDone = false;
@@ -664,12 +724,15 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         """)
         wait_script("return window.__liveDone && !!document.querySelector('.player[aria-label=\"Player preview\"]');")
         assert check_device_footer()['status'] == 'Playback device: No device connected', 'Footer kept a device after playback moved away'
+        stopped_media = wait_media({'status': 'Stopped'})
+        assert stopped_media['track'] == '/org/mpris/MediaPlayer2/TrackList/NoTrack' and not stopped_media['pause'], f'MPRIS kept the item: {stopped_media}'
         execute("document.querySelector('.playback-test').scrollIntoView({block: 'start'});")
         (output / 'melora-linux-settings-playback.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         (output / 'native-acceptance.json').write_text(json.dumps({
             'embedded_playback': 'signed-out refusals (access_token, play_here, playback_command), malformed report refused, probe accepted, no SDK script, test block shown',
             'live_player': 'synthetic SDK reports: real track, disallowed Next disabled, Open in Spotify, plain artwork, fits at 1440x940/100%, footer This app, preview restored',
             'podcast_skip': 'synthetic episode: Back/Forward 15 seconds in the Previous/Next boxes, labels drawn, no +, fits',
+            'media_controls': 'MPRIS on a private session bus: synthetic track and episode shown, PlayPause/Previous sent, disallowed Next ignored, episode Next/Previous seek 15 s, Stopped after playback moved away',
             'spotify_brand': {key: round(brand[key], 1) for key in ('logoWidth', 'labelHeight', 'clearTop', 'clearBottom', 'clearRight', 'clearLeft', 'likeHeight', 'lineHeight', 'artworkHeight')},
             'engine_drm_probe': {key: engine_probe[key] for key in ('secure', 'widevine', 'playready', 'fairplay')},
             'spotify_account': 'plugin status, invalid Client ID and URL rejection, masked save and Settings screenshots passed; sign-in not run',

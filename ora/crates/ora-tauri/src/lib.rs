@@ -30,6 +30,14 @@ use tauri::{
 
 pub use ora_core as core;
 
+mod media;
+
+/// Starts the system's media controls for the main window: media keys, Windows' media overlay
+/// and Linux's MPRIS. Without them (no session bus, say) Melora works as before.
+pub fn media_controls<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    media::attach(window);
+}
+
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 
 type Core = Ora<ReqwestClient, KeyringStore, SystemBrowser>;
@@ -349,10 +357,20 @@ async fn playback_command<R: Runtime>(
     command: PlayerCommand,
 ) -> Result<(), OraError> {
     main_only(&window)?;
-    match ora.0.player_command(command).await? {
+    run_command(&ora.0, &bridge, command).await
+}
+
+/// Runs a player command where it belongs: the SDK, or here with a refresh to follow. The
+/// player's buttons and the system's media keys both come through here.
+async fn run_command(
+    core: &Arc<Core>,
+    bridge: &Bridge,
+    command: PlayerCommand,
+) -> Result<(), OraError> {
+    match core.player_command(command).await? {
         Some(command) => bridge.send(command),
         None => {
-            reconcile(&ora.0);
+            reconcile(core);
             Ok(())
         }
     }

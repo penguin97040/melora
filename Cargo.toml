@@ -28,6 +28,10 @@ keyring-core = "=1.0.1"
 windows-native-keyring-store = { version = "=1.1.0", default-features = false }
 apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
 zbus-secret-service-keyring-store = { version = "=1.0.1", features = ["crypto-rust"] }
+# The system's media controls, on crates already in the build: Windows' own (Tauri's `windows`)
+# and MPRIS over the D-Bus crate the Linux credential store uses.
+windows = { version = "=0.62.2", features = ["Foundation", "Media", "Storage_Streams", "Win32_Foundation", "Win32_System_WinRT"] }
+zbus = "=5.19.0"
 
 [profile.release]
 codegen-units = 1

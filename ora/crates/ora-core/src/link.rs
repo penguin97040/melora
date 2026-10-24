@@ -46,6 +46,11 @@ pub struct SpotifyUri {
 }
 
 impl SpotifyUri {
+    /// The base62 ID.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     pub fn uri(&self) -> String {
         format!("spotify:{}:{}", self.kind.name(), self.id)
     }

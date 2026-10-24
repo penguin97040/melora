@@ -127,8 +127,15 @@ pub fn run() {
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
             #[cfg(target_os = "windows")]
             let builder = builder.data_directory(webview_data);
+            // wry's defaults, plus no media entry of WebView2's own ("Unknown app"): Melora
+            // publishes its own, which also covers other devices.
+            #[cfg(target_os = "windows")]
+            let builder = builder.additional_browser_args(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,HardwareMediaKeyHandling",
+            );
             let window = builder.build()?;
             window_layout::fit_opening_window(&window)?;
+            ora_tauri::media_controls(&window);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

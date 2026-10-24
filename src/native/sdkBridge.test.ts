@@ -145,7 +145,7 @@ describe('sdk-bridge', () => {
     expect(FakePlayer.created).toHaveLength(1);
     const player = FakePlayer.created[0]!;
     expect(player.options.name).toBe('Melora');
-    expect(player.options.enableMediaSession).toBe(true);
+    expect(player.options.enableMediaSession).toBe(false);
     expect(player.connect).toHaveBeenCalledTimes(1);
     expect(
       calls.filter((c) => c.command === 'plugin:ora|sdk_attach'),

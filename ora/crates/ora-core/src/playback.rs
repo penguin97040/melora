@@ -750,7 +750,8 @@ fn percent(volume: f64) -> u8 {
     (volume.clamp(0.0, 1.0) * 100.0).round() as u8
 }
 
-fn now_ms() -> u64 {
+/// Milliseconds since the Unix epoch, the clock `updatedAtMs` uses.
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

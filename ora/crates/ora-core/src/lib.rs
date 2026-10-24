@@ -10,6 +10,7 @@ pub mod http;
 pub mod library;
 pub mod link;
 pub mod loopback;
+pub mod media;
 pub mod oauth;
 pub mod order;
 pub mod pkce;

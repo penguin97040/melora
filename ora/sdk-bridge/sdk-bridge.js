@@ -193,7 +193,8 @@ export function install(options) {
     const created = new Spotify.Player({
       name,
       volume,
-      enableMediaSession: true,
+      // Melora publishes the system's media controls itself, from Rust, for every device.
+      enableMediaSession: false,
       getOAuthToken: (callback) => {
         invoke('plugin:ora|access_token').then(callback, (error) => {
           // Without a token the SDK would wait forever: stop, and say why.
