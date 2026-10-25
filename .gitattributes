@@ -1,3 +1,6 @@
+# Every text file is LF in every checkout, Windows included.
+* text=auto eol=lf
+
 # Preserve original legal notices byte-for-byte, including upstream whitespace.
 third-party/notices/**/*.txt -text -whitespace
 public/fonts/licences/*.txt -text -whitespace
