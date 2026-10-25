@@ -4,6 +4,14 @@ Melora is a personal desktop music client built with Tauri 2, Rust, React and Ty
 
 Until you sign in, Melora welcomes you with its own artwork and a way to set up Spotify; nothing in it is invented music. Sign in to Spotify in Settings to see your account and your own music. With Spotify Premium you can also play Spotify inside Melora (Settings → Playback in Melora, through Spotify's Web Playback SDK); while it plays, the player shows the real track, artwork and controls. The player can also show and control what's playing on your other Spotify devices (a phone, the Spotify app, a speaker), and **Choose device** moves the music between them and Melora. The **+** beside the track title adds it to your Liked Songs or removes it. While a podcast plays, the buttons beside Play skip back or forward 15 seconds. Your keyboard's media keys (play/pause, next, previous) and the system's media controls (Windows' media overlay, or the Linux desktop's through MPRIS) control whatever the player shows, in Melora or on another device; in a podcast, next and previous skip 15 seconds there too. Once you allow it, the sidebar lists your Spotify playlists and Liked Songs: choose one to see its tracks, and select a title to play it (Spotify only shows the tracks of playlists you own or collaborate on). The sidebar also lists your saved **Albums**, **Podcasts** and **Your Episodes**: open an album or podcast to see its tracks or episodes, and save or remove it with the **+** beside its name. Every song row has a **+** for Liked Songs too. Signed in, **Search** finds songs, artists, albums, playlists, podcasts and episodes on Spotify as you type; select one to play it (a podcast opens), or **See all** for more of one kind. Long lists stay quick: only the rows on screen are drawn. **Home** shows what's playing, what you played recently, your playlists, saved albums and podcasts, and your devices. The sidebar's **Recently Played** lists your last 50 tracks, and **Queue** shows what plays next; Spotify doesn't let other apps reorder the queue. Right-click a song or episode (or press the Menu key or Shift+F10) to add it to the queue or to one of your playlists. **+ New** in the sidebar creates a private playlist. In a playlist you own or collaborate on, drag a song (or press Alt+↑ or Alt+↓) to move it, or remove it from its menu; the change is made on Spotify too. You can also put the sidebar's playlists in your own order by dragging them or with Alt+↑ and Alt+↓; Melora keeps that order on this device and leaves Spotify's order as it is (**Use Spotify’s order** goes back). Melora is unofficial and is not affiliated with, endorsed by or sponsored by Spotify.
 
+## Screenshots
+
+![Melora signed out: the welcome with Melora's own artwork, and the idle player](docs/screenshots/welcome.png)
+
+![Settings, where you add your own Spotify Client ID and sign in](docs/screenshots/settings.png)
+
+Both show Melora on Linux before signing in, so they contain no account data. Signed in, your playlists, library, search results and the music playing on your devices fill the same layout.
+
 ## Run in a browser
 
 Use Node 22.22.1 or later:
@@ -55,4 +63,4 @@ Melora requests only the scopes the current features need: your profile at sign-
 
 ## Licences
 
-No project software licence has been selected. Bundled fonts retain their original licences; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Public visibility does not itself grant reuse rights.
+Melora's own source is licensed under the [MIT License](LICENSE). Bundled fonts keep their original licences, and the Spotify logo and Like icons are Spotify's trademarks, used only as Spotify's guidelines require and not covered by Melora's licence; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Dependencies keep their own licences.
