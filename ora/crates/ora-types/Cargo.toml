@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Data types and feature registry for Melora's Spotify core"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

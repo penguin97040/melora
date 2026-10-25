@@ -2,6 +2,7 @@
   "name": "melora",
   "version": "0.7.1",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "node node_modules/vite/bin/vite.js --host 127.0.0.1",

@@ -4,6 +4,7 @@ version = "0.7.1"
 description = "A personal desktop music client"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish = false
 
 [lib]

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Tauri 2 plugin exposing ora-core to Melora's main window"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish = false
 links = "tauri-plugin-ora"
 

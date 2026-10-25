@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Tauri-free Spotify logic for Melora"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish = false
 
 # Never add `tauri` here: scripts/check-ora-boundaries.sh fails the check if it appears.
