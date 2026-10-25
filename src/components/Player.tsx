@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { PreviewTrack } from '../preview';
 import type { PlaybackStatus, PlayerCommand } from '../native/client';
 import type { RepeatMode } from '../native/bindings/RepeatMode';
 import {
@@ -60,24 +59,18 @@ type LiveProps = {
 };
 
 export function Player({
-  track,
   playback,
   ...live
 }: Omit<LiveProps, 'playback'> & {
-  track: PreviewTrack;
   playback: PlaybackStatus | null;
 }) {
   // While a Spotify device is active (Melora itself or another one), the panel shows the
-  // real item and controls. Otherwise it stays the labelled synthetic preview.
+  // real item and controls. Otherwise it waits, with Melora's own artwork.
   if (playback && isLive(playback)) {
     return <LivePlayer playback={playback} {...live} />;
   }
   return (
-    <PreviewPlayer
-      track={track}
-      devicePicker={live.devicePicker}
-      message={live.likeMessage}
-    />
+    <IdlePlayer devicePicker={live.devicePicker} message={live.likeMessage} />
   );
 }
 
@@ -283,44 +276,36 @@ function LivePlayer({
   );
 }
 
-function PreviewPlayer({
-  track,
+/** Nothing plays on any device: the same rows as the live player, so the layout holds. */
+function IdlePlayer({
   devicePicker,
   message,
 }: {
-  track: PreviewTrack;
   devicePicker: ReactNode;
   /** A short confirmation, like "Added to Mine", in place of the mode line. */
   message: string | null;
 }) {
-  const [shuffle, setShuffle] = useState(false);
-  const [repeat, setRepeat] = useState<'Off' | 'All' | 'Song'>('Off');
-
   return (
-    <aside className="player panel" aria-label="Player preview">
+    <aside className="player panel" aria-label="Player: nothing playing">
       <div className="panel-label">
         <span>Now playing</span>
-        <span>Preview</span>
+        <span>Idle</span>
       </div>
       <div className="player-artwork">
-        <div
-          className="cover"
-          role="img"
-          aria-label="Abstract synthetic preview artwork"
-        >
+        <div className="cover" role="img" aria-label="Melora artwork">
           <div className="cover-orbit" />
           <span className="cover-mark">m.</span>
-          <span className="cover-caption">AFTER THE QUIET / 001</span>
+          <span className="cover-caption">MELORA / NOTHING PLAYING</span>
         </div>
       </div>
       <div className="player-body">
-        <p className="eyebrow">Selected preview track</p>
-        <h2 className="track-title">{track.title}</h2>
-        <p className="artist-name">{track.artist}</p>
-        <p className="muted">{track.album}</p>
+        <p className="eyebrow">Ready when you are</p>
+        <h2 className="track-title">Nothing playing</h2>
+        <p className="artist-name">Start Spotify on any device</p>
+        <p className="muted">and it shows here.</p>
         <div className="playback-notice">
           <span className="status-dot" />
-          Playback unavailable in preview
+          Waiting for Spotify
         </div>
         <label className="sr-only" htmlFor="seek">
           Track position
@@ -328,20 +313,10 @@ function PreviewPlayer({
         <input id="seek" type="range" min="0" max="100" value="0" disabled />
         <div className="time-labels">
           <span>0:00</span>
-          <span>{track.duration}</span>
+          <span>0:00</span>
         </div>
-        <div
-          className="transport"
-          role="group"
-          aria-label="Preview player controls"
-        >
-          <button
-            className={shuffle ? 'mode-active' : ''}
-            aria-label={`Shuffle: ${shuffle ? 'On' : 'Off'} (preview)`}
-            aria-pressed={shuffle}
-            aria-describedby="preview-modes-note"
-            onClick={() => setShuffle((current) => !current)}
-          >
+        <div className="transport" role="group" aria-label="Player controls">
+          <button disabled aria-label="Shuffle">
             <ShuffleIcon />
           </button>
           <button disabled aria-label="Previous track">
@@ -353,28 +328,17 @@ function PreviewPlayer({
           <button disabled aria-label="Next track">
             <NextIcon />
           </button>
-          <button
-            className={repeat !== 'Off' ? 'mode-active' : ''}
-            aria-label={`Repeat: ${repeat} (preview)`}
-            aria-pressed={repeat !== 'Off'}
-            aria-describedby="preview-modes-note"
-            onClick={() =>
-              setRepeat((current) =>
-                current === 'Off' ? 'All' : current === 'All' ? 'Song' : 'Off',
-              )
-            }
-          >
-            <RepeatIcon one={repeat === 'Song'} />
+          <button disabled aria-label="Repeat">
+            <RepeatIcon one={false} />
           </button>
         </div>
         <p className="mode-status" role="status">
-          {message ?? `Shuffle: ${shuffle ? 'On' : 'Off'} · Repeat: ${repeat}`}
+          {message ?? 'The controls work once something plays.'}
         </p>
         {devicePicker}
-        <p className="player-footnote" id="preview-modes-note">
-          Shuffle and repeat are preview selections only; track order and audio
-          are unchanged. Modes reset on relaunch. Real playback shows here once
-          enabled in Settings. These tracks and artwork are synthetic.
+        <p className="player-footnote">
+          Melora shows and controls what plays on your Spotify devices. Choose
+          device to pick one.
         </p>
       </div>
     </aside>

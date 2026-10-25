@@ -165,12 +165,14 @@ beforeEach(() => {
 });
 
 describe('Spotify search', () => {
-  it('keeps the preview search when signed out', async () => {
+  it('asks a signed-out user to sign in before searching', async () => {
     vi.mocked(subscribeSpotify).mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole('button', { name: /Search/ }));
-    expect(screen.getByLabelText('Search preview tracks')).toBeVisible();
+    expect(
+      screen.getByText(/Sign in with Spotify to search songs/),
+    ).toBeVisible();
     expect(screen.queryByLabelText('Search Spotify')).not.toBeInTheDocument();
     expect(searchSpotify).not.toHaveBeenCalled();
   });

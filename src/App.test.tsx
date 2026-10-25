@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import App, { LIKE_MESSAGE_MS, REMOTE_REFRESH_MS } from './App';
 import {
+  allowFeature,
   allowLibrary,
   enablePlayback,
   getAppInfo,
@@ -55,6 +56,7 @@ vi.mock('./native/client', () => ({
   transferPlayback: vi.fn(),
   allowDeviceControl: vi.fn(),
   allowLibrary: vi.fn(),
+  allowFeature: vi.fn(),
   refreshLiked: vi.fn(),
   toggleLiked: vi.fn(),
 }));
@@ -73,7 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getWindowChrome).mockResolvedValue('preview');
   vi.mocked(getAppInfo).mockResolvedValue({
-    version: '0.7.0',
+    version: '0.7.1',
     platform: 'windows',
     preferences: { scale: 100, comfortable: false, volume: 70 },
     storageError: null,
@@ -85,7 +87,7 @@ beforeEach(() => {
   vi.mocked(enablePlayback).mockResolvedValue(true);
 });
 
-describe('preview shell', () => {
+describe('app shell', () => {
   it('reveals the committed shell once after restored preferences settle in Strict Mode', async () => {
     let resolveInfo!: (info: AppInfo) => void;
     vi.mocked(getAppInfo).mockReturnValue(
@@ -95,7 +97,7 @@ describe('preview shell', () => {
     );
     vi.mocked(showMainWindow).mockImplementation(async () => {
       expect(document.documentElement.style.fontSize).toBe('150%');
-      expect(screen.getByText('v0.7.0 / windows')).toBeInTheDocument();
+      expect(screen.getByText('v0.7.1 / windows')).toBeInTheDocument();
       expect(document.querySelector('.app')).toHaveClass('comfortable');
     });
     render(
@@ -106,7 +108,7 @@ describe('preview shell', () => {
     expect(showMainWindow).not.toHaveBeenCalled();
     await act(async () =>
       resolveInfo({
-        version: '0.7.0',
+        version: '0.7.1',
         platform: 'windows',
         storageError: null,
         preferences: { scale: 150, comfortable: true, volume: 40 },
@@ -127,7 +129,7 @@ describe('preview shell', () => {
       }),
     );
     render(<App />);
-    await screen.findByText('v0.7.0 / windows');
+    await screen.findByText('v0.7.1 / windows');
     expect(showMainWindow).not.toHaveBeenCalled();
     await act(async () => resolveChrome('macos'));
     expect(showMainWindow).toHaveBeenCalledTimes(1);
@@ -177,145 +179,85 @@ describe('preview shell', () => {
     expect(showMainWindow).not.toHaveBeenCalled();
   });
 
-  it('reports native IPC details and keeps unavailable playback disabled', async () => {
+  it('reports native IPC details and keeps every control off until something plays', async () => {
     render(<App />);
-    expect(await screen.findByText('v0.7.0 / windows')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Next track' })).toBeDisabled();
-    expect(screen.getByText('Synthetic preview')).toBeInTheDocument();
+    expect(await screen.findByText('v0.7.1 / windows')).toBeInTheDocument();
+    const controls = screen.getByRole('group', { name: 'Player controls' });
+    for (const button of within(controls).getAllByRole('button'))
+      expect(button).toBeDisabled();
+    expect(
+      screen.getByRole('heading', { name: 'Nothing playing' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Spotify not connected')).toBeInTheDocument();
     expect(screen.getByText('Stream quality: unavailable')).toBeInTheDocument();
   });
 
-  it('supports keyboard selection and playlist filtering', async () => {
+  it('welcomes a new user with Melora’s artwork and no invented music', async () => {
     const user = userEvent.setup();
     render(<App />);
-    const playlist = screen.getByRole('button', {
-      name: /Soft machinery.*Static Gardens/,
-    });
-    playlist.focus();
-    await user.keyboard('{Enter}');
+    await screen.findByText('v0.7.1 / windows');
     expect(
-      screen.getByRole('heading', { name: 'Soft machinery' }),
+      screen.getByRole('heading', { name: 'Welcome to Melora' }),
     ).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'Melora artwork' })).toHaveLength(
+      2,
+    );
+    expect(document.body.textContent).not.toMatch(/synthetic|preview/i);
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Search/ }));
+    expect(screen.getByRole('heading', { name: 'Search' })).toBeInTheDocument();
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole('main')).getByRole('button', {
+        name: 'Set up Spotify',
+      }),
+    );
     expect(
-      screen.queryByRole('button', { name: /Signal at dawn.*Glass Meridian/ }),
-    ).not.toBeInTheDocument();
-    const track = screen.getByRole('button', {
-      name: /Amber lines.*Static Gardens/,
-    });
-    track.focus();
-    await user.keyboard('{Enter}');
-    expect(
-      screen.getByRole('heading', { name: 'Amber lines' }),
+      screen.getByRole('heading', { name: 'Display & preferences' }),
     ).toBeInTheDocument();
   });
 
-  it('cycles preview modes by keyboard and retains them across tracks and navigation', async () => {
+  it('asks a signed-out user to sign in, and a signed-in one for each permission', async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<App />);
-    await screen.findByText('v0.7.0 / windows');
-    const controls = screen.getByRole('group', {
-      name: 'Preview player controls',
+    vi.mocked(allowFeature).mockResolvedValue(signedIn([]));
+    let report!: (status: SpotifyStatus) => void;
+    vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) => {
+      report = onStatus;
+      onStatus({ ...signedIn([]), auth: { kind: 'signedOut' } });
     });
+    render(<App />);
+    await screen.findByText('v0.7.1 / windows');
     expect(
-      within(controls)
-        .getAllByRole('button')
-        .map((button) => button.getAttribute('aria-label')),
-    ).toEqual([
-      'Shuffle: Off (preview)',
-      'Previous track',
-      'Play',
-      'Next track',
-      'Repeat: Off (preview)',
-    ]);
-    const shuffle = screen.getByRole('button', {
-      name: 'Shuffle: Off (preview)',
-    });
-    expect(shuffle).toHaveAccessibleDescription(
-      /track order and audio are unchanged/i,
-    );
-    shuffle.focus();
-    await user.keyboard(' ');
-    expect(shuffle).toHaveAccessibleName('Shuffle: On (preview)');
-    expect(shuffle).toHaveAttribute('aria-pressed', 'true');
-    await user.keyboard('{Tab}');
-    const repeat = screen.getByRole('button', {
-      name: 'Repeat: Off (preview)',
-    });
-    expect(repeat).toHaveFocus();
-    await user.keyboard('{Enter}');
-    expect(repeat).toHaveAccessibleName('Repeat: All (preview)');
-    expect(repeat).toHaveAttribute('aria-pressed', 'true');
-    await user.keyboard(' ');
-    expect(repeat).toHaveAccessibleName('Repeat: Song (preview)');
-    expect(within(repeat).getByText('1')).toHaveAttribute(
-      'aria-hidden',
-      'true',
-    );
-    await user.click(
-      screen.getByRole('button', { name: /Amber lines.*Static Gardens/ }),
-    );
-    await user.click(screen.getByRole('button', { name: /Search/ }));
-    await user.click(screen.getByRole('button', { name: /Settings/ }));
-    await user.click(
-      screen.getByRole('button', { name: /Soft machinery.*Static Gardens/ }),
-    );
-    expect(
-      screen.getByRole('heading', { name: 'Amber lines' }),
+      screen.getByText('Sign in to Spotify to see your playlists here.'),
     ).toBeInTheDocument();
-    expect(shuffle).toHaveAccessibleName('Shuffle: On (preview)');
-    expect(repeat).toHaveAccessibleName('Repeat: Song (preview)');
     expect(
-      screen
-        .getAllByRole('button', { name: /Static Gardens/ })
-        .slice(1)
-        .map((button) => button.textContent),
-    ).toEqual([
-      'Night geometryStatic Gardens',
-      'Amber linesStatic Gardens',
-      'Small hoursStatic Gardens',
-      'Paper satellitesStatic Gardens',
-    ]);
-    await user.click(repeat);
-    expect(repeat).toHaveAccessibleName('Repeat: Off (preview)');
-    expect(repeat).toHaveAttribute('aria-pressed', 'false');
-    expect(within(repeat).queryByText('1')).not.toBeInTheDocument();
-    await user.click(shuffle);
-    expect(shuffle).toHaveAttribute('aria-pressed', 'false');
-    await user.click(shuffle);
-    await user.click(repeat);
-    expect(savePreferences).not.toHaveBeenCalled();
-    unmount();
-    render(<App />);
-    expect(
-      screen.getByRole('button', { name: 'Shuffle: Off (preview)' }),
-    ).toHaveAttribute('aria-pressed', 'false');
-    expect(
-      screen.getByRole('button', { name: 'Repeat: Off (preview)' }),
-    ).toHaveAttribute('aria-pressed', 'false');
-  });
-
-  it('searches synthetic data and announces an empty result', async () => {
-    const user = userEvent.setup();
-    render(<App />);
+      within(screen.getByRole('main')).getByRole('button', {
+        name: 'Sign in with Spotify',
+      }),
+    ).toBeInTheDocument();
+    act(() => report(signedIn([])));
+    await user.click(
+      within(screen.getByRole('main')).getByRole('button', {
+        name: 'Show my Spotify playlists',
+      }),
+    );
+    expect(allowFeature).toHaveBeenLastCalledWith('Playlists');
     await user.click(screen.getByRole('button', { name: /Search/ }));
-    const search = screen.getByRole('searchbox');
-    expect(search).toHaveFocus();
-    await user.type(search, 'not in preview');
-    expect(screen.getByText(/No preview tracks match/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Allow search' }));
+    expect(allowFeature).toHaveBeenLastCalledWith('Search');
   });
 
   it('restores display settings and reports failed persistence', async () => {
     const user = userEvent.setup();
     vi.mocked(getAppInfo).mockResolvedValue({
-      version: '0.7.0',
+      version: '0.7.1',
       platform: 'windows',
       preferences: { scale: 125, comfortable: true, volume: 40 },
       storageError: null,
     });
     vi.mocked(savePreferences).mockRejectedValue(new Error('fixture failure'));
     render(<App />);
-    await screen.findByText('v0.7.0 / windows');
+    await screen.findByText('v0.7.1 / windows');
     await user.click(screen.getByRole('button', { name: /Settings/ }));
     expect(screen.getByRole('combobox')).toHaveValue('125');
     expect(screen.getByRole('checkbox')).toBeChecked();
@@ -326,29 +268,6 @@ describe('preview shell', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Preferences cannot be saved',
     );
-  });
-  it('searches all preview tracks after a playlist selection and reports actual artist counts', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await screen.findByText('v0.7.0 / windows');
-    await user.click(
-      screen.getByRole('button', { name: /Soft machinery.*Static Gardens/ }),
-    );
-    expect(screen.getByText('1 synthetic artist')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Search/ }));
-    await user.type(screen.getByRole('searchbox'), '  SIGNAL  ');
-    expect(
-      screen.getByRole('button', { name: /Signal at dawn.*Glass Meridian/ }),
-    ).toBeInTheDocument();
-    expect(screen.getByText('1 synthetic artist')).toBeInTheDocument();
-    await user.clear(screen.getByRole('searchbox'));
-    expect(screen.getByText('12 tracks')).toBeInTheDocument();
-    expect(screen.getByText('3 synthetic artists')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Library/ }));
-    expect(
-      screen.getByRole('heading', { name: 'Soft machinery' }),
-    ).toBeInTheDocument();
-    expect(screen.getByText('4 tracks')).toBeInTheDocument();
   });
 
   it('serialises rapid preference changes and recovers after a failed write', async () => {
@@ -361,7 +280,7 @@ describe('preview shell', () => {
         }),
     );
     render(<App />);
-    await screen.findByText('v0.7.0 / windows');
+    await screen.findByText('v0.7.1 / windows');
     await user.click(screen.getByRole('button', { name: /Settings/ }));
     await user.selectOptions(screen.getByRole('combobox'), '125');
     await user.click(screen.getByRole('checkbox'));
@@ -442,7 +361,9 @@ describe('device control', () => {
 
   it('never reads devices without the permission', async () => {
     render(<App />);
-    await screen.findByText('Set up Spotify');
+    await within(
+      screen.getByRole('navigation', { name: 'Main navigation' }),
+    ).findByText('Set up Spotify');
     expect(refreshPlayback).not.toHaveBeenCalled();
   });
 

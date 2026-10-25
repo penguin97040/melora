@@ -4,9 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Player } from './Player';
 import { playbackStatus } from '../native/playbackFixture';
 import type { PlaybackStatus } from '../native/client';
-import { previewTracks } from '../preview';
 
-const track = previewTracks[0]!;
 const slot = <div data-testid="device-slot" />;
 
 function live(extra: Partial<PlaybackStatus> = {}): PlaybackStatus {
@@ -37,7 +35,6 @@ function renderPlayer(
   const onOpenInSpotify = vi.fn();
   render(
     <Player
-      track={track}
       playback={playback}
       devicePicker={slot}
       likeMessage={likeMessage}
@@ -50,7 +47,7 @@ function renderPlayer(
 }
 
 describe('player panel', () => {
-  it('stays the labelled preview unless Melora is the active device', () => {
+  it('waits, with every control off, until a device is active', () => {
     for (const playback of [
       null,
       playbackStatus(),
@@ -58,7 +55,6 @@ describe('player panel', () => {
     ]) {
       const { unmount } = render(
         <Player
-          track={track}
           playback={playback}
           devicePicker={slot}
           likeMessage={null}
@@ -67,8 +63,10 @@ describe('player panel', () => {
           onOpenInSpotify={vi.fn()}
         />,
       );
-      expect(screen.getByLabelText('Player preview')).toBeInTheDocument();
-      // Synthetic content carries no Spotify brand and no + control.
+      expect(
+        screen.getByLabelText('Player: nothing playing'),
+      ).toBeInTheDocument();
+      // Nothing from Spotify is shown, so there's no Spotify brand and no + control.
       expect(
         screen.queryByRole('img', { name: 'Spotify' }),
       ).not.toBeInTheDocument();
@@ -76,8 +74,18 @@ describe('player panel', () => {
         screen.queryByRole('button', { name: /Liked Songs/ }),
       ).not.toBeInTheDocument();
       expect(screen.getByTestId('device-slot')).toBeInTheDocument();
-      expect(screen.getByText(track.title)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+      expect(
+        screen.getByRole('heading', { name: 'Nothing playing' }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: 'Melora artwork' })).toBeVisible();
+      for (const name of [
+        'Shuffle',
+        'Previous track',
+        'Play',
+        'Next track',
+        'Repeat',
+      ])
+        expect(screen.getByRole('button', { name })).toBeDisabled();
       unmount();
     }
   });

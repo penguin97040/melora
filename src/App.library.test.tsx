@@ -143,13 +143,13 @@ beforeEach(() => {
 });
 
 describe('Spotify playlists and Liked Songs', () => {
-  it('keeps the preview until playlists are allowed, then asks for them', async () => {
+  it('asks for playlists until they are allowed', async () => {
     signIn(['SignIn', 'Profile']);
     vi.mocked(allowFeature).mockResolvedValue(signedIn(LISTS));
     render(<App />);
-    const preview = screen.getByRole('region', { name: 'Preview playlists' });
+    const sidebar = screen.getByRole('region', { name: 'Your playlists' });
     await userEvent.setup().click(
-      await within(preview).findByRole('button', {
+      await within(sidebar).findByRole('button', {
         name: 'Show my Spotify playlists',
       }),
     );

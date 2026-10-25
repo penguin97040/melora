@@ -1,4 +1,4 @@
-// Transport icons shared by the preview and the live player.
+// Transport icons shared by the idle and the live player.
 
 export function ShuffleIcon() {
   return (

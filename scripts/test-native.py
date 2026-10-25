@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 const css = getComputedStyle(slot);
                 const scale = parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
                 return {textVisible, footerHeight: bounds.height,
-                    ordered: footer.children[0].textContent.includes('Synthetic preview') &&
+                    ordered: footer.children[0].textContent.includes('Spotify not connected') &&
                         footer.children[1] === device && footer.children[2].className === 'stream-quality',
                     status: device.textContent.trim().replace(/\\s+/g, ' '),
                     slotHeight: slot.getBoundingClientRect().height,
@@ -213,7 +213,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             assert artwork['centred'] and artwork['width'] <= artwork['playerWidth'] + 1, f'Artwork not centred/bounded: {artwork}'
             assert abs(artwork['height'] - artwork['expectedSize']) <= 2, f'Artwork not using available height: {artwork}'
             assert artwork['gap'] == 0 and artwork['border'] == '0px', f'Artwork has gutter or border: {artwork}'
-            assert artwork['decorationInside'], f'Synthetic decoration outside artwork: {artwork}'
+            assert artwork['decorationInside'], f'Artwork decoration outside artwork: {artwork}'
             if not artwork['stacked']:
                 assert artwork['height'] >= artwork['minimum'] - 1, f'Artwork below minimum: {artwork}'
                 if artwork['room'] >= artwork['minimum']:
@@ -228,8 +228,21 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         assert execute("return document.querySelector('button[aria-label=Play]').disabled;")
         assert execute("return document.querySelector('.stream-quality').textContent === 'Stream quality: unavailable';")
         wait_script("return document.querySelector('.brand-symbol').complete && document.querySelector('.brand-symbol').naturalWidth > 0;")
-        assert execute("return document.fonts.check('16px \"Share Tech Mono\"') && document.fonts.check('16px \"Chakra Petch\"') && document.fonts.check('16px \"Ubuntu Mono\"');")
-        assert execute("return getComputedStyle(document.querySelector('.content')).backgroundColor === 'rgb(14, 33, 24)' && getComputedStyle(document.querySelector('.playlist-item.selected')).backgroundColor === 'rgb(18, 42, 30)';"), 'Centre/side panel backgrounds changed incorrectly'
+        # Ask for every bundled font: signed out, nothing on screen uses the track font yet.
+        execute("for (const family of ['Share Tech Mono', 'Chakra Petch', 'Ubuntu Mono']) document.fonts.load(`16px \"${family}\"`);")
+        wait_script("return document.fonts.check('16px \"Share Tech Mono\"') && document.fonts.check('16px \"Chakra Petch\"') && document.fonts.check('16px \"Ubuntu Mono\"');")
+        assert execute("return getComputedStyle(document.querySelector('.content')).backgroundColor === 'rgb(14, 33, 24)';"), 'Centre panel background changed incorrectly'
+        # Signed out, the centre welcomes with Melora's own artwork: no invented music anywhere.
+        welcome = execute("""
+            const art = document.querySelector('.welcome-art').getBoundingClientRect();
+            const main = document.querySelector('main').getBoundingClientRect();
+            return {heading: document.querySelector('main h1').textContent,
+                artInside: art.left >= main.left && art.right <= main.right && art.width > 300 && art.height > 100,
+                bars: document.querySelectorAll('.welcome-wave span').length,
+                noInvented: !/synthetic|preview/i.test(document.body.innerText),
+                noTable: !document.querySelector('.track-table')};
+        """)
+        assert welcome == {'heading': 'Welcome to Melora', 'artInside': True, 'bars': 24, 'noInvented': True, 'noTable': True}, f'Welcome wrong: {welcome}'
         contrast = execute("""
             const css = getComputedStyle(document.documentElement);
             const names = ['--text', '--muted', '--cyan', '--orange', '--active-mode'];
@@ -359,24 +372,29 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                     box.top - 3 >= Math.max(player.top, document.querySelector('.masthead').getBoundingClientRect().bottom) &&
                     box.bottom + 3 <= Math.min(player.bottom, document.querySelector('.status-strip').getBoundingClientRect().top);
             """), 'Focused mode control obscured'
-        execute("document.querySelector('.transport button').focus();")
-        key(' ')
-        wait_script("return document.querySelector('.transport button').getAttribute('aria-label') === 'Shuffle: On (preview)';")
+        # Nothing plays, so every transport control is off; Choose device is the player's one control.
+        assert execute("return [...document.querySelectorAll('.transport button')].every(b => b.disabled);"), 'Idle controls enabled'
+        def focus_device_link():
+            execute("document.querySelector('.player-device .link-button').focus();")
+            # A real Shift+Tab and Tab, so the focus is keyboard focus.
+            call('POST', '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': [
+                {'type': 'keyDown', 'value': '\ue008'},
+                {'type': 'keyDown', 'value': '\ue004'}, {'type': 'keyUp', 'value': '\ue004'},
+                {'type': 'keyUp', 'value': '\ue008'}]}]})
+            key('\ue004')
+            wait_script("return document.activeElement === document.querySelector('.player-device .link-button');")
+            execute("document.activeElement.scrollIntoView({block: 'nearest'});")
+        focus_device_link()
         visible_focus()
-        key('\ue004')
-        wait_script("return document.activeElement === document.querySelector('.transport button:last-child');")
-        for mode in ['All', 'Song', 'Off', 'All', 'Song']:
-            key('\ue007')
-            wait_script(f"return document.activeElement.getAttribute('aria-label') === 'Repeat: {mode} (preview)';")
-        assert execute("return document.querySelector('.repeat-one').textContent === '1';")
-        assert execute("return document.querySelector('.mode-status').textContent === 'Shuffle: On · Repeat: Song';")
-        execute("document.querySelectorAll('.playlist-item')[2].focus();")
+        # The navigation and the welcome's action work from the keyboard.
+        execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Search')).focus();")
         key('\ue007')
-        wait_script("return document.querySelector('h1').textContent === 'Soft machinery';")
-        execute("document.querySelectorAll('.track-select')[1].focus();")
+        wait_script("return document.querySelector('main h1').textContent === 'Search' && !document.querySelector('main input[type=search]');")
+        execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Library')).focus();")
         key('\ue007')
-        wait_script("return document.querySelector('.track-title').textContent === 'Amber lines';")
-        assert execute("return getComputedStyle(document.activeElement).outlineStyle !== 'none';")
+        wait_script("return document.querySelector('main h1').textContent === 'Welcome to Melora';")
+        execute("document.querySelector('.welcome .action-button').focus();")
+        assert execute("return document.activeElement.textContent === 'Set up Spotify' && getComputedStyle(document.activeElement).outlineStyle !== 'none';"), 'Welcome action not keyboard-focusable'
         execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Settings')).click();")
         wait_script("return !!document.querySelector('select');")
         cases = [(width, height, scale) for width, heights in [(1440, [940, 820, 660, 520]), (1360, [940, 660, 520])] for height in heights for scale in [100, 125, 150, 175, 200]]
@@ -387,20 +405,27 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             execute("const el=document.querySelector('select');el.value=String(arguments[0]);el.dispatchEvent(new Event('change',{bubbles:true}));", scale)
             wait_script(f"return document.documentElement.style.fontSize === '{scale}%';")
             execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Library')).click();")
-            wait_script("return !!document.querySelector('.track-table');")
+            wait_script("return !!document.querySelector('.welcome-art');")
             assert execute("return document.querySelector('.masthead').getBoundingClientRect().height <= 37 * arguments[0] / 100;", scale), 'Header expanded beyond compact layout'
-            assert execute("return document.querySelector('.track-select').getBoundingClientRect().width > 90;"), 'Track text space collapsed'
+            assert execute("return document.querySelector('.welcome h1').getBoundingClientRect().width > 90;"), 'Welcome text space collapsed'
+            # The sidebar's connection note never sits on the Playlists heading (it scrolls instead).
+            assert execute("""
+                const note = document.querySelector('.connection-note');
+                if (!note.getClientRects().length) return true;
+                const a = note.getBoundingClientRect();
+                const b = document.querySelector('.playlists .panel-label').getBoundingClientRect();
+                return a.bottom <= b.top + 0.5 || a.top >= b.bottom - 0.5 || a.right <= b.left + 0.5 || a.left >= b.right - 0.5;
+            """), f'Connection note overlaps the Playlists heading at {width}x{height}/{scale}%'
             assert execute("return document.querySelector('main').clientHeight > 180;"), f'Content pane collapsed at {width}/{height}/{scale}'
             shot = call('GET', '/screenshot')
             (output / f'melora-linux-{width}-{height}-{scale}-percent.png').write_bytes(base64.b64decode(shot))
-            execute("const track = document.querySelector('.track-select'); track.focus(); track.scrollIntoView({block: 'nearest'});")
-            assert execute("const box = document.activeElement.getBoundingClientRect(); return box.top >= document.querySelector('.masthead').getBoundingClientRect().bottom - 1 && box.bottom <= document.querySelector('.status-strip').getBoundingClientRect().top + 1;"), 'Focused track obscured by persistent header/footer'
-            assert execute('return scrollY === 0 && document.documentElement.scrollHeight <= innerHeight + 1;'), 'Track focus moved the whole document'
+            execute("const action = document.querySelector('.welcome .action-button'); action.focus(); action.scrollIntoView({block: 'nearest'});")
+            assert execute("const box = document.activeElement.getBoundingClientRect(); return box.top >= document.querySelector('.masthead').getBoundingClientRect().bottom - 1 && box.bottom <= document.querySelector('.status-strip').getBoundingClientRect().top + 1;"), 'Focused welcome action obscured by persistent header/footer'
+            assert execute('return scrollY === 0 && document.documentElement.scrollHeight <= innerHeight + 1;'), 'Welcome focus moved the whole document'
             shot = call('GET', '/screenshot')
-            (output / f'melora-linux-{width}-{height}-{scale}-percent-tracks.png').write_bytes(base64.b64decode(shot))
+            (output / f'melora-linux-{width}-{height}-{scale}-percent-welcome.png').write_bytes(base64.b64decode(shot))
             assert execute('return document.documentElement.scrollWidth <= innerWidth;'), f'Horizontal overflow at {width}px/{scale}%'
             assert execute("return document.querySelector('.status-strip').getBoundingClientRect().bottom <= innerHeight + 1;"), 'Status strip outside viewport'
-            assert execute("return document.querySelector('.mode-status').textContent === 'Shuffle: On · Repeat: Song';"), 'Modes lost during navigation'
             artwork = check_artwork()
             check_device_footer()
             geometry.append(execute("""
@@ -428,18 +453,9 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                 shot = call('GET', '/screenshot')
                 (output / 'melora-linux-home-signed-out.png').write_bytes(base64.b64decode(shot))
                 execute("[...document.querySelectorAll('.nav-item')].find((b) => b.textContent.includes('Library')).click();")
-                wait_script("return !!document.querySelector('.track-table');")
-            execute("document.querySelector('.transport button').focus();")
-            # Establish keyboard modality after native resize/reflow.
-            # Use a real keyboard Tab before checking the keyboard outline.
-            key('\ue004')
-            execute("document.activeElement.scrollIntoView({block: 'nearest'});")
-            visible_focus()
-            call('POST', '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': [
-                {'type': 'keyDown', 'value': '\ue008'},
-                {'type': 'keyDown', 'value': '\ue004'}, {'type': 'keyUp', 'value': '\ue004'},
-                {'type': 'keyUp', 'value': '\ue008'}]}]})
-            execute("document.activeElement.scrollIntoView({block: 'nearest'});")
+                wait_script("return !!document.querySelector('.welcome-art');")
+            # Real keys after the native resize/reflow, before checking the keyboard outline.
+            focus_device_link()
             visible_focus()
             assert execute("""
                 const buttons = [...document.querySelectorAll('.transport button')].map(button => button.getBoundingClientRect());
@@ -478,7 +494,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         session = launch()
         wait_script("return document.documentElement.style.fontSize === '125%';")
         assert f'v{VERSION} / linux' in execute('return document.body.innerText;')
-        assert execute("return document.querySelector('.transport button').getAttribute('aria-label') === 'Shuffle: Off (preview)' && document.querySelector('.transport button:last-child').getAttribute('aria-label') === 'Repeat: Off (preview)';"), 'Preview modes persisted after relaunch'
+        assert execute("return document.querySelector('.player').getAttribute('aria-label') === 'Player: nothing playing' && !!document.querySelector('.welcome-art');"), 'Relaunch did not open on the welcome and the idle player'
         shot = call('GET', '/screenshot')
         (output / 'melora-linux-restored.png').write_bytes(base64.b64decode(shot))
         # Spotify account: the real ora plugin over IPC, with a synthetic Client ID only.
@@ -723,7 +739,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             window.__TAURI_INTERNALS__.invoke('plugin:ora|sdk_event', {event: {type: 'state', state: null}})
                 .then(() => { window.__liveDone = true; });
         """)
-        wait_script("return window.__liveDone && !!document.querySelector('.player[aria-label=\"Player preview\"]');")
+        wait_script("return window.__liveDone && !!document.querySelector('.player[aria-label=\"Player: nothing playing\"]');")
         assert check_device_footer()['status'] == 'Playback device: No device connected', 'Footer kept a device after playback moved away'
         stopped_media = wait_media({'status': 'Stopped'})
         assert stopped_media['track'] == '/org/mpris/MediaPlayer2/TrackList/NoTrack' and not stopped_media['pause'], f'MPRIS kept the item: {stopped_media}'
@@ -731,7 +747,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
         (output / 'melora-linux-settings-playback.png').write_bytes(base64.b64decode(call('GET', '/screenshot')))
         (output / 'native-acceptance.json').write_text(json.dumps({
             'embedded_playback': 'signed-out refusals (access_token, play_here, playback_command), malformed report refused, probe accepted, no SDK script, test block shown',
-            'live_player': 'synthetic SDK reports: real track, disallowed Next disabled, Open in Spotify, plain artwork, fits at 1440x940/100%, footer This app, preview restored',
+            'live_player': 'synthetic SDK reports: real track, disallowed Next disabled, Open in Spotify, plain artwork, fits at 1440x940/100%, footer This app, idle player restored',
             'podcast_skip': 'synthetic episode: Back/Forward 15 seconds in the Previous/Next boxes, labels drawn, no +, fits',
             'media_controls': 'MPRIS on a private session bus: synthetic track and episode shown, PlayPause/Previous sent, disallowed Next ignored, episode Next/Previous seek 15 s, Stopped after playback moved away',
             'spotify_brand': {key: round(brand[key], 1) for key in ('logoWidth', 'labelHeight', 'clearTop', 'clearBottom', 'clearRight', 'clearLeft', 'likeHeight', 'lineHeight', 'artworkHeight')},
@@ -745,7 +761,8 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
             'device_list_placement': {key: device_list[key] for key in ('inside', 'overArtwork', 'layoutKept')},
             'brand_icon': 'loaded', 'artwork_geometry': artwork, 'duplicate_readiness_user_geometry': 'passed', 'compact_header': 'passed',
             'preferred_opening_size': opening_size, 'preferred_player_fit': 'no scrollbar', 'preferred_nav_fit': 'Home, Library, Search, Settings and the connection note above the playlists; signed-out Home asks to sign in',
-            'preview_modes': 'keyboard toggle/cycle, navigation retention and relaunch reset passed',
+            'welcome': welcome,
+            'idle_player': 'every transport control off; Choose device, the navigation and the welcome action by keyboard; restored after a relaunch and after playback moved away',
             'player_geometry': geometry, 'artwork_height_sequence': height_sequence,
             'artwork_wrapping': wrapping,
             'os_dpi_changes': 'not tested; scale/decorations arithmetic unit-tested',

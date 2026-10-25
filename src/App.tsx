@@ -94,7 +94,7 @@ import type {
 } from './native/client';
 import type { Feature } from './native/bindings/Feature';
 import { describeFailure } from './features/account';
-import { previewPlaylists, previewTracks } from './preview';
+import { Welcome } from './components/Welcome';
 
 function connectionLabel(status: SpotifyStatus | null): string {
   switch (status?.auth.kind) {
@@ -110,7 +110,6 @@ function connectionLabel(status: SpotifyStatus | null): string {
 }
 
 type View = 'Home' | 'Library' | 'Search' | 'Settings';
-const initialTrack = previewTracks[0]!;
 /** While Melora isn't playing itself, the active device is read this often (DO_NEXT §4.5). */
 export const REMOTE_REFRESH_MS = 30_000;
 /** A remote track change shows this long after the track should have ended. */
@@ -131,11 +130,9 @@ function quietly(action: () => Promise<unknown>): void {
 
 export default function App() {
   const [view, setView] = useState<View>('Library');
-  const [playlist, setPlaylist] = useState(0);
-  // A Spotify list chosen in the sidebar; `null` shows the preview playlist.
+  // A Spotify list chosen in the sidebar; `null` shows the welcome.
   const [source, setSource] = useState<ListSource | null>(null);
   const [playMessage, setPlayMessage] = useState<string | null>(null);
-  const [selected, setSelected] = useState(initialTrack);
   const [query, setQuery] = useState('');
   // The kind of Spotify search result "See all" shows, or `null` for the overview.
   const [seeAll, setSeeAll] = useState<SearchKind | null>(null);
@@ -383,7 +380,7 @@ export default function App() {
     ...playlists,
     items: orderPlaylists(playlists.items, playlistOrder.order),
   };
-  // Signing out, or a sign-in without the permission, goes back to the preview.
+  // Signing out, or a sign-in without the permission, goes back to the welcome.
   const shown = showPlaylists ? source : null;
   const list = usePaged(
     shown &&
@@ -418,7 +415,7 @@ export default function App() {
     shown && mayLike ? `${profile?.id ?? ''}:${sourceKey(shown)}` : null,
     savedUris,
   );
-  // Signed in, Search searches Spotify; signed out, it filters the preview tracks.
+  // Signed in, Search searches Spotify; signed out, it asks to sign in.
   const searchesSpotify = granted(spotify, 'Search');
   const searched = useSearch(query, searchesSpotify);
   const wanted = query.trim();
@@ -776,16 +773,6 @@ export default function App() {
       });
   }
 
-  const activePlaylist = previewPlaylists[playlist]!;
-  const searchQuery = query.trim().toLocaleLowerCase('en-NZ');
-  const tracks = previewTracks.filter((track) =>
-    view === 'Search'
-      ? `${track.title} ${track.artist} ${track.album}`
-          .toLocaleLowerCase('en-NZ')
-          .includes(searchQuery)
-      : !activePlaylist.artist || track.artist === activePlaylist.artist,
-  );
-  const artistCount = new Set(tracks.map((track) => track.artist)).size;
   const spotifyList = view === 'Library' && shown !== null;
   const spotifySearch = view === 'Search' && searchesSpotify;
   const spotifyHome = view === 'Home' && spotify?.auth.kind === 'signedIn';
@@ -858,55 +845,29 @@ export default function App() {
               onCancelCreate={() => setCreating(null)}
             />
           ) : (
-            <section className="playlists" aria-label="Preview playlists">
+            <section className="playlists" aria-label="Your playlists">
               <div className="panel-label">
                 <span>Playlists</span>
-                <span>04</span>
               </div>
-              <div className="playlist-items">
-                {previewPlaylists.map((item, i) => (
-                  <button
-                    key={item.name}
-                    className={`playlist-item ${playlist === i ? 'selected' : ''}`}
-                    aria-pressed={playlist === i}
-                    onClick={() => {
-                      setPlaylist(i);
-                      chooseList(null);
-                    }}
-                  >
-                    <span className="playlist-icon">▤</span>
-                    <span>
-                      <span className="playlist-name">{item.name}</span>
-                      <span className="playlist-subtitle">{item.subtitle}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-              {spotify?.auth.kind === 'signedIn' ? (
-                <p className="sidebar-footnote">
-                  A local design preview.
-                  <br />
+              <p className="playlists-note">
+                {spotify?.auth.kind === 'signedIn' ? (
                   <button
                     className="link-button"
                     onClick={() => allow('Playlists')}
                   >
                     Show my Spotify playlists
                   </button>
-                </p>
-              ) : (
-                <p className="sidebar-footnote">
-                  A local design preview.
-                  <br />
-                  No account required.
-                </p>
-              )}
+                ) : (
+                  'Sign in to Spotify to see your playlists here.'
+                )}
+              </p>
             </section>
           )}
         </aside>
         <main id="content" className="content panel" tabIndex={-1}>
           <div className="panel-label">
             <span>{view}</span>
-            <span>{fromSpotify ? 'From Spotify' : 'Local / preview'}</span>
+            <span>{fromSpotify ? 'From Spotify' : 'Melora'}</span>
           </div>
           {windowMessage && (
             <p className="error-message" role="alert">
@@ -927,7 +888,7 @@ export default function App() {
             <section className="settings">
               <p className="eyebrow">Make room for the music</p>
               <h1>Display & preferences</h1>
-              <p className="intro">Adjust the preview to suit your screen.</p>
+              <p className="intro">Adjust Melora to suit your screen.</p>
               <label className="setting-row">
                 <span>Interface scale</span>
                 <select
@@ -1061,101 +1022,15 @@ export default function App() {
               onAllow={allow}
             />
           ) : (
-            <>
-              <section className="collection-heading">
-                <p className="eyebrow">
-                  {view === 'Search'
-                    ? 'Find a preview track'
-                    : 'Your listening space'}
-                </p>
-                <h1>{view === 'Search' ? 'Search' : activePlaylist.name}</h1>
-                <p className="intro">
-                  {view === 'Search'
-                    ? 'Search the synthetic titles, artists and albums below.'
-                    : 'Invented music. A real space to make it your own.'}
-                </p>
-                <div className="collection-meta">
-                  <span>{tracks.length.toLocaleString('en-NZ')} tracks</span>
-                  <span>
-                    {artistCount.toLocaleString('en-NZ')} synthetic{' '}
-                    {artistCount === 1 ? 'artist' : 'artists'}
-                  </span>
-                  <span>No audio</span>
-                </div>
-              </section>
-              {view === 'Search' && (
-                <div className="search-field">
-                  <label htmlFor="search">Search preview tracks</label>
-                  <input
-                    ref={searchRef}
-                    id="search"
-                    type="search"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Track, artist or album…"
-                  />
-                </div>
-              )}
-              <div className="track-table-wrapper">
-                <table className="track-table">
-                  <caption className="sr-only">
-                    Synthetic preview tracks. Select a title to inspect its
-                    details.
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      <th scope="col">Track / artist</th>
-                      <th scope="col">Album</th>
-                      <th scope="col">Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tracks.map((track) => (
-                      <tr
-                        key={track.id}
-                        className={
-                          selected.id === track.id ? 'selected-track' : ''
-                        }
-                      >
-                        <td className="track-number">
-                          {String(track.id).padStart(2, '0')}
-                        </td>
-                        <td>
-                          <button
-                            className="track-select"
-                            aria-pressed={selected.id === track.id}
-                            onClick={() => setSelected(track)}
-                          >
-                            <span>{track.title}</span>
-                            <span className="track-artist">{track.artist}</span>
-                          </button>
-                        </td>
-                        <td className="album-cell">{track.album}</td>
-                        <td className="duration">{track.duration}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {tracks.length === 0 && (
-                <p className="empty-state" role="status">
-                  No preview tracks match “{query}”. Try another title or
-                  artist.
-                </p>
-              )}
-              <div className="content-note">
-                <span className="note-mark">i</span>
-                <p>
-                  This is a synthetic preview. Sign in with Spotify in Settings
-                  to see your own library and play it.
-                </p>
-              </div>
-            </>
+            <Welcome
+              view={view === 'Search' ? 'Search' : 'Library'}
+              spotify={spotify}
+              onOpenSettings={() => setView('Settings')}
+              onAllow={allow}
+            />
           )}
         </main>
         <Player
-          track={selected}
           playback={playback}
           devicePicker={
             <DevicePicker
@@ -1176,7 +1051,7 @@ export default function App() {
       <footer className="status-strip">
         <span>
           <span className="status-dot" />
-          {fromSpotify ? 'From Spotify' : 'Synthetic preview'}
+          {fromSpotify ? 'From Spotify' : connectionLabel(spotify)}
         </span>
         {profile && (
           <span className="account-chip">

@@ -154,7 +154,8 @@ p {
 .sidebar {
   border-right: 1px solid var(--border);
   display: grid;
-  grid-template-rows: minmax(12rem, 1fr) minmax(0, 2fr);
+  /* The navigation row never shrinks below its content, so nothing overlaps the playlists. */
+  grid-template-rows: minmax(min-content, 1fr) minmax(0, 2fr);
   overflow-y: auto;
 }
 .nav-item {
@@ -443,6 +444,82 @@ p {
   color: var(--muted);
   padding: 1.4rem 1.5rem;
   font-size: 0.8125rem;
+  line-height: 1.6;
+}
+/* Before Spotify has a list to show: Melora's own artwork, drawn from the theme's tokens. */
+.welcome-art {
+  position: relative;
+  margin: 0 1.5rem 1.5rem;
+  aspect-ratio: 21 / 9;
+  max-height: 20rem;
+  overflow: hidden;
+  container-type: inline-size;
+  border: 1px solid var(--border);
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 2rem,
+      var(--border) 2rem calc(2rem + 1px)
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 2rem,
+      var(--border) 2rem calc(2rem + 1px)
+    ),
+    linear-gradient(135deg, var(--surface-raised), var(--background));
+}
+.welcome-emblem {
+  position: absolute;
+  inset: 0 6% 0 auto;
+  width: 40%;
+  display: grid;
+  place-items: center;
+}
+.welcome-orbit {
+  position: absolute;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--cyan);
+  border-radius: 50%;
+  transform: rotate(-25deg) scaleX(0.6);
+  opacity: 0.5;
+}
+.welcome-orbit::after {
+  content: '';
+  position: absolute;
+  inset: 12%;
+  border: 1px solid var(--orange);
+  border-radius: 50%;
+}
+.welcome-mark {
+  color: var(--cyan);
+  font-family: var(--font-heading);
+  font-size: 9cqw;
+  z-index: 1;
+}
+.welcome-wave {
+  position: absolute;
+  left: 4%;
+  bottom: 16%;
+  width: 46%;
+  height: 36%;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6cqw;
+}
+.welcome-wave span {
+  flex: 1;
+  background: var(--cyan);
+  opacity: 0.35;
+}
+.welcome-wave span:nth-child(7n + 3) {
+  background: var(--orange);
+  opacity: 0.6;
+}
+.playlists-note {
+  padding: 0.9rem 0.85rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
   line-height: 1.6;
 }
 .note-mark {

@@ -23,7 +23,7 @@ import type {
 } from '../native/client';
 import type { Feature } from '../native/bindings/Feature';
 
-/** What the sidebar (or a search result) can show in the centre besides the preview playlists. */
+/** What the sidebar (or a search result) can show in the centre. */
 export type ListSource =
   | { kind: 'liked' }
   | { kind: 'playlist'; playlist: PlaylistSummary }

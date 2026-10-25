@@ -20,7 +20,7 @@ Consult [Tauri's current prerequisites](https://v2.tauri.app/start/prerequisites
 - Native Linux tests: Xvfb, xdotool, WebKitWebDriver, and `dbus-run-session` and `busctl` for the media controls.
 - macOS: Rust and Xcode Command Line Tools. Build and test on a supported macOS version.
 
-No Spotify configuration is required for the preview shell. To test sign-in, enter a Client ID in Settings, or set `MELORA_SPOTIFY_CLIENT_ID` for a development run (it overrides the saved value and can't be edited in the app). Never commit a real Client ID.
+No Spotify configuration is required to run the app shell (signed out, it shows the welcome). To test sign-in, enter a Client ID in Settings, or set `MELORA_SPOTIFY_CLIENT_ID` for a development run (it overrides the saved value and can't be edited in the app). Never commit a real Client ID.
 
 ## Checks
 
@@ -82,7 +82,7 @@ Melora is pre-1.0. The middle number is the last finished development phase (0.5
 
 ## Runtime acceptance
 
-- Windows: extract to a writable folder; launch without installation; confirm integrated title controls, displayed version/platform and synthetic preview. Change settings, close and relaunch; inspect neighbouring `data/preferences.json`. Also test an unwritable folder and missing WebView2.
+- Windows: extract to a writable folder; launch without installation; confirm integrated title controls, displayed version/platform and the signed-out welcome. Change settings, close and relaunch; inspect neighbouring `data/preferences.json`. Also test an unwritable folder and missing WebView2.
 - Linux/macOS: confirm the same shell and IPC, then preference persistence in the platform app-data directory. macOS builds require a Mac.
 - Keyboard: tab through navigation, playlists, track titles, shuffle, repeat and settings; select with Enter or Space; verify visible focus and the skip link. Shuffle toggles and repeat cycles Off → All → Song → Off, retaining selections across navigation and resetting on relaunch.
 - Startup: the native window starts hidden. After local preference loading settles and the shell commits, `show_main_window` finishes sizing/centring and reveals it once. Failed preference loading still reveals the shell with an error. Confirm repeated launches reveal a centred shell without a visible move, and that resizing remains unchanged after duplicate readiness calls.
