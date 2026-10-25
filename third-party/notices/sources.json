@@ -41,5 +41,29 @@
     "source": "https://raw.githubusercontent.com/spdx/license-list-data/main/json/details/MPL-2.0.json",
     "sha256": "1a389c0a135f37855baa2fb879f86ed111d7facf8b0d5188330b35a22c4428a1",
     "note": "Standard MPL 2.0 text from SPDX; original selectors source files reference Mozilla MPL 2.0."
+  },
+  {
+    "package": "dlopen2-0.8.2",
+    "file": "LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE",
+    "sha256": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2"
+  },
+  {
+    "package": "dlopen2_derive-0.4.3",
+    "file": "LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE",
+    "sha256": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2"
+  },
+  {
+    "package": "libappindicator-sys-0.9.0",
+    "file": "LICENSE-APACHE.txt",
+    "source": "https://raw.githubusercontent.com/tauri-apps/libappindicator-rs/eafd1e3682a1247f595410266091e9684021cb6f/LICENSE-APACHE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "package": "libappindicator-sys-0.9.0",
+    "file": "LICENSE-MIT.txt",
+    "source": "https://raw.githubusercontent.com/tauri-apps/libappindicator-rs/eafd1e3682a1247f595410266091e9684021cb6f/LICENSE-MIT",
+    "sha256": "eb227437252b2a7a9c1fc342c93ade1f3d7ce38cc6dd754f613db07d53ceff0b"
   }
 ]

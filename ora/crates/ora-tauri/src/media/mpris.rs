@@ -68,6 +68,12 @@ impl Root {
         "Melora"
     }
 
+    /// The Linux packages install `Melora.desktop`, so desktops can show its icon.
+    #[zbus(property)]
+    fn desktop_entry(&self) -> &str {
+        "Melora"
+    }
+
     #[zbus(property)]
     fn supported_uri_schemes(&self) -> Vec<String> {
         Vec::new()

@@ -4,6 +4,10 @@ import hashlib
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+
+# The Rust target whose runtime crates ship (the Windows ZIP by default).
+target = sys.argv[1] if len(sys.argv) > 1 else 'x86_64-pc-windows-msvc'
 
 output = Path('artifacts/dependency-notices')
 if output.exists():
@@ -23,7 +27,7 @@ for name in ['react', 'react-dom', 'scheduler', '@tauri-apps/api']:
         shutil.copyfile(notice, destination / notice.name)
     report.append({'name': name, 'version': metadata['version'], 'licence': metadata.get('license')})
 
-result = subprocess.run(['cargo', 'metadata', '--manifest-path', 'Cargo.toml', '--locked', '--format-version', '1', '--filter-platform', 'x86_64-pc-windows-msvc'], check=True, capture_output=True, text=True)
+result = subprocess.run(['cargo', 'metadata', '--manifest-path', 'Cargo.toml', '--locked', '--format-version', '1', '--filter-platform', target], check=True, capture_output=True, text=True)
 metadata = json.loads(result.stdout)
 nodes = {node['id']: node for node in metadata['resolve']['nodes']}
 # A virtual workspace has no resolve root, so start from the shipped application package.

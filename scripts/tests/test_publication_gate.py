@@ -165,6 +165,18 @@ class PublicationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn(secret, result.stdout + result.stderr)
 
+    def test_upstream_licence_may_name_its_author_but_is_still_scanned(self):
+        notice = self.root / 'third-party/notices/fixture-1.0.0/LICENSE.txt'
+        notice.parent.mkdir(parents=True)
+        notice.write_text('Copyright (c) Fixture Author <author' + '@example.com>\n')
+        self.assertEqual(self.gate().returncode, 0)
+        notice.write_text('ghp_' + 'L' * 36)
+        self.assertNotEqual(self.gate().returncode, 0)
+        notice.unlink()
+        sources = self.root / 'third-party/notices/sources.json'
+        sources.write_text('{"contact": "author' + '@example.com"}\n')
+        self.assertNotEqual(self.gate().returncode, 0)
+
     def test_standard_retina_icon_filename_still_scans_contents(self):
         icon = self.root / 'src-tauri/icons' / ('128x128' + '@' + '2x.png')
         icon.parent.mkdir(parents=True)

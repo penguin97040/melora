@@ -77,7 +77,11 @@ def audit_blob(path, data):
     # Only known font/icon formats may be binary. Scan ASCII secret signatures too.
     if b'\0' in data and Path(path).suffix in {'.woff2', '.png', '.ico', '.icns'}:
         return path_results + findings(data.decode('latin1').encode(), location)
-    return path_results + findings(data, location, licence=path.startswith('public/fonts/licences/'))
+    # Licence texts may name their authors' addresses and can't be edited; every other rule still applies.
+    # Upstream notices are pinned by SHA-256 in sources.json, which gets no exception itself.
+    licence = path.startswith('public/fonts/licences/') or (
+        path.startswith('third-party/notices/') and path != 'third-party/notices/sources.json')
+    return path_results + findings(data, location, licence=licence)
 
 
 def policy():

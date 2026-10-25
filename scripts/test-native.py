@@ -646,6 +646,7 @@ with tempfile.TemporaryDirectory(prefix='melora-runtime-') as data:
                                'length': 200_000_000, 'track': '/app/melora/item/AbCd0123456789xyzXYZ01',
                                'next': False, 'previous': True, 'pause': True, 'seek': True}, f'MPRIS track wrong: {track_media}'
         assert mpris_property('Identity', 'org.mpris.MediaPlayer2') == 'Melora', 'MPRIS identity wrong'
+        assert mpris_property('DesktopEntry', 'org.mpris.MediaPlayer2') == 'Melora', 'MPRIS desktop entry wrong'
         for method in ('PlayPause', 'Next', 'Previous'):
             mpris_press(method)
         track_keys = media_commands(2)

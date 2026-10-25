@@ -1147,8 +1147,8 @@ export default function App() {
               <div className="content-note">
                 <span className="note-mark">i</span>
                 <p>
-                  This is a synthetic preview. Spotify sign-in, your library and
-                  playback are coming in later milestones.
+                  This is a synthetic preview. Sign in with Spotify in Settings
+                  to see your own library and play it.
                 </p>
               </div>
             </>

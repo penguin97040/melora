@@ -145,8 +145,8 @@ pub fn run() {
             show_main_window
         ])
         .run(tauri::generate_context!());
-    if result.is_err() {
-        eprintln!("Melora could not start. Check that the system WebView and application data folder are available.");
+    if let Err(error) = result {
+        eprintln!("Melora could not start ({error}). Check that the system WebView and application data folder are available.");
         std::process::exit(1);
     }
 }

@@ -60,7 +60,7 @@ export const defaultPreferences: Preferences = {
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
     return {
-      version: '0.6.1',
+      version: '0.7.0',
       platform: 'Browser preview',
       preferences: defaultPreferences,
       storageError: null,

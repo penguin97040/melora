@@ -8,19 +8,19 @@ import tempfile
 import zipfile
 
 FONT_LICENCES = ('Chakra-Petch.txt', 'Share-Tech-Mono.txt', 'Ubuntu-Mono.txt')
-NOTICE = '''Melora portable preview
+NOTICE = '''Melora for Windows (portable)
 
 Extract the complete folder to a writable location and run Melora.exe.
 Windows x64 and the system Microsoft Edge WebView2 Runtime are required.
 No installer or Chromium runtime is included. This build is unsigned.
-Preferences are stored in data/preferences.json beside Melora.exe, and your
-Spotify Client ID in data/spotify.json. Neither file holds a password or token.
+Melora keeps its settings in data/ beside Melora.exe: your preferences, your
+Spotify Client ID and the WebView's storage. None of it holds a password or token.
 If data cannot be written, move the extracted folder to a writable location.
 Spotify sign-in keeps its refresh token only in Windows Credential Manager;
-moving this folder to another computer requires signing in again. There is
-no audio yet: the library and player still show labelled synthetic content.
+moving this folder to another computer requires signing in again.
+Playing inside Melora needs Spotify Premium; Melora can also control Spotify
+on your other devices.
 Melora is unofficial and not affiliated with Spotify.
-This is a compilation-tested build; Windows launch still needs manual testing.
 '''
 # Files the owner's copy writes at runtime. They must never be packaged.
 NEVER_SHIP = {'spotify.json', 'preferences.json'}
