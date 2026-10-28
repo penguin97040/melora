@@ -90,6 +90,7 @@ function signedIn(granted: Feature[]): SpotifyStatus {
         spotifyUrl: null,
       },
       sessionOnly: false,
+      consenting: false,
       granted,
     },
     clientIdFromEnvironment: false,

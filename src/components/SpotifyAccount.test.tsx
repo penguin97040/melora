@@ -106,6 +106,28 @@ describe('Spotify account settings', () => {
     expect(cancelSpotifySignIn).toHaveBeenCalledOnce();
   });
 
+  it('keeps the account and offers Cancel while a new permission waits', async () => {
+    render(
+      <SpotifyAccount
+        status={status({
+          kind: 'signedIn',
+          profile,
+          sessionOnly: false,
+          consenting: true,
+          granted: [],
+        })}
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Waiting for you to approve the new permission in your browser…',
+    );
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Cancel sign-in' }),
+    );
+    expect(cancelSpotifySignIn).toHaveBeenCalled();
+  });
+
   it('shows the signed-in account with Open in Spotify and Sign out', async () => {
     render(
       <SpotifyAccount
@@ -113,6 +135,7 @@ describe('Spotify account settings', () => {
           kind: 'signedIn',
           profile,
           sessionOnly: false,
+          consenting: false,
           granted: [],
         })}
       />,
@@ -132,7 +155,13 @@ describe('Spotify account settings', () => {
     render(
       <SpotifyAccount
         status={status(
-          { kind: 'signedIn', profile, sessionOnly: true, granted: [] },
+          {
+            kind: 'signedIn',
+            profile,
+            sessionOnly: true,
+            granted: [],
+            consenting: false,
+          },
           { lastError: { kind: 'storageUnavailable' } },
         )}
       />,
@@ -147,7 +176,13 @@ describe('Spotify account settings', () => {
     render(
       <SpotifyAccount
         status={status(
-          { kind: 'signedIn', profile: null, sessionOnly: false, granted: [] },
+          {
+            kind: 'signedIn',
+            profile: null,
+            sessionOnly: false,
+            granted: [],
+            consenting: false,
+          },
           { lastError: { kind: 'forbidden', hint: 'Allowlist' } },
         )}
       />,
@@ -221,7 +256,13 @@ describe('Spotify account settings', () => {
   it('offers to load a profile that failed to load', async () => {
     vi.mocked(loadSpotifyProfile).mockResolvedValue(profile);
     const offline = status(
-      { kind: 'signedIn', profile: null, sessionOnly: false, granted: [] },
+      {
+        kind: 'signedIn',
+        profile: null,
+        sessionOnly: false,
+        granted: [],
+        consenting: false,
+      },
       { lastError: { kind: 'offline' } },
     );
     render(<SpotifyAccount status={offline} />);
@@ -239,7 +280,13 @@ describe('Spotify account settings', () => {
     render(
       <SpotifyAccount
         status={status(
-          { kind: 'signedIn', profile: null, sessionOnly: true, granted: [] },
+          {
+            kind: 'signedIn',
+            profile: null,
+            sessionOnly: true,
+            granted: [],
+            consenting: false,
+          },
           { lastError: { kind: 'storageUnavailable' } },
         )}
       />,
@@ -255,7 +302,13 @@ describe('Spotify account settings', () => {
   it('retries a missing profile by itself only after connection problems', () => {
     const missing = (lastError: SpotifyStatus['lastError']) =>
       status(
-        { kind: 'signedIn', profile: null, sessionOnly: false, granted: [] },
+        {
+          kind: 'signedIn',
+          profile: null,
+          sessionOnly: false,
+          granted: [],
+          consenting: false,
+        },
         { lastError },
       );
     expect(profileRetryable(missing({ kind: 'offline' }))).toBe(true);
@@ -270,7 +323,13 @@ describe('Spotify account settings', () => {
     expect(
       profileRetryable(
         status(
-          { kind: 'signedIn', profile, sessionOnly: false, granted: [] },
+          {
+            kind: 'signedIn',
+            profile,
+            sessionOnly: false,
+            granted: [],
+            consenting: false,
+          },
           { lastError: { kind: 'offline' } },
         ),
       ),

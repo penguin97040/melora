@@ -163,7 +163,18 @@ fn signed_in_profile(status: &Status) -> Option<Profile> {
 
 async fn wait_for_signing_in(ora: &TestOra) {
     let mut status = ora.subscribe();
-    let _ = status.wait_for(|s| s.auth == AuthState::SigningIn).await;
+    let _ = status
+        .wait_for(|s| {
+            matches!(
+                s.auth,
+                AuthState::SigningIn
+                    | AuthState::SignedIn {
+                        consenting: true,
+                        ..
+                    }
+            )
+        })
+        .await;
 }
 
 #[tokio::test]
@@ -856,6 +867,53 @@ async fn cancelling_the_extra_permission_keeps_the_existing_sign_in() {
     assert_eq!(pending.await.unwrap().err(), Some(OraError::Cancelled));
     assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref1"));
     assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc1");
+}
+
+#[tokio::test]
+async fn a_refresh_in_flight_when_more_permission_is_asked_keeps_its_rotated_token() {
+    let h = harness("incremental-during-refresh", User::Ignore);
+    h.store.insert(REFRESH_TOKEN, "ref1");
+    h.store.insert(
+        SESSION,
+        r#"{"authorizedAt":1,"scopes":"user-read-private","accountId":null}"#,
+    );
+    h.http.push(200, &tokens_json("acc1", None));
+    h.http.push(200, ME);
+    h.ora.restore().await;
+    if let Auth::SignedIn(session) = &mut h.ora.lock().auth {
+        session.access = Some((Secret::new("old"), Instant::now()));
+    }
+
+    // A slow refresh that rotates the refresh token is on its way (focus reads after an idle
+    // hour) when the user asks for another permission, and then cancels that request.
+    h.http.set_delay(Some(Duration::from_millis(100)));
+    h.http.push(200, &tokens_json("acc2", Some("ref2")));
+    let before = h.http.requests().len();
+    let ora = Arc::clone(&h.ora);
+    let refreshing = tokio::spawn(async move { ora.fresh_access().await });
+    while h.http.requests().len() == before {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let ora = Arc::clone(&h.ora);
+    let pending = tokio::spawn(async move { ora.sign_in(Some(Feature::Playlists)).await });
+    wait_for_signing_in(&h.ora).await;
+    assert_eq!(refreshing.await.unwrap().unwrap().expose(), "acc2");
+    h.ora.cancel_sign_in();
+    assert_eq!(pending.await.unwrap().err(), Some(OraError::Cancelled));
+
+    // The kept sign-in carries on with the rotated token, as the store does.
+    h.http.set_delay(None);
+    assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref2"));
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc2");
+    if let Auth::SignedIn(session) = &mut h.ora.lock().auth {
+        session.access = Some((Secret::new("old"), Instant::now()));
+    }
+    h.http.push(200, &tokens_json("acc3", None));
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc3");
+    let refreshed = h.http.requests().pop().unwrap();
+    assert!(refreshed
+        .form
+        .contains(&("refresh_token".to_owned(), "ref2".to_owned())));
 }
 
 #[tokio::test]
@@ -2441,4 +2499,214 @@ async fn melora_keeps_its_own_playlist_order_per_account_without_spotify() {
     h.ora.set_playlist_order(&[]).unwrap();
     assert_eq!(h.ora.playlist_order(), Ok(Vec::new()));
     assert_eq!(h.http.requests().len(), before);
+}
+
+/// Signed in from a saved session (`acc1`, `ref1`, profile `ME`).
+async fn restored(label: &str) -> Harness {
+    let h = harness(label, User::Ignore);
+    h.store.insert(REFRESH_TOKEN, "ref1");
+    h.store.insert(
+        SESSION,
+        r#"{"authorizedAt":1,"scopes":"user-read-private","accountId":null}"#,
+    );
+    h.http.push(200, &tokens_json("acc1", None));
+    h.http.push(200, ME);
+    h.ora.restore().await;
+    h
+}
+
+/// The user approves in the browser: Spotify calls back with a code for the latest sign-in.
+fn approve_in_browser(h: &Harness) {
+    let opened = h.browser.opened.lock().unwrap().last().cloned().unwrap();
+    let url = url::Url::parse(&opened).unwrap();
+    let param = |name: &str| {
+        url.query_pairs()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.into_owned())
+            .unwrap()
+    };
+    let (redirect, state) = (param("redirect_uri"), param("state"));
+    tokio::spawn(async move {
+        get(
+            &redirect,
+            &format!("/callback?code=fixture-code&state={state}"),
+        )
+        .await
+    });
+}
+
+async fn wait_for_exchange(ora: &TestOra) {
+    while !ora.lock().pending.as_ref().is_some_and(|p| p.exchanging) {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+fn playlist_scopes() -> String {
+    let mut scopes: Vec<&str> = Feature::Playlists.scopes().to_vec();
+    scopes.push("user-read-private");
+    scopes.join(" ")
+}
+
+#[tokio::test]
+async fn asking_for_more_permission_keeps_the_sign_in_working_meanwhile() {
+    let h = restored("consent-keeps").await;
+    let ora = Arc::clone(&h.ora);
+    let pending = tokio::spawn(async move { ora.sign_in(Some(Feature::Playlists)).await });
+    wait_for_signing_in(&h.ora).await;
+
+    let status = h.ora.status();
+    assert!(matches!(
+        status.auth,
+        AuthState::SignedIn {
+            consenting: true,
+            ..
+        }
+    ));
+    assert!(signed_in_profile(&status).is_some());
+    assert_eq!(h.ora.require(Feature::SignIn), Ok(()));
+    assert_eq!(
+        h.ora.require(Feature::Playlists),
+        Err(OraError::NeedsScope {
+            feature: Feature::Playlists
+        })
+    );
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc1");
+
+    // The new session arrives with its profile, so the UI never sees one without it.
+    h.http.push(
+        200,
+        &tokens_with_scope("acc2", Some("ref2"), &playlist_scopes()),
+    );
+    h.http.push(200, ME);
+    approve_in_browser(&h);
+    let status = pending.await.unwrap().unwrap();
+    assert!(matches!(
+        status.auth,
+        AuthState::SignedIn {
+            consenting: false,
+            ..
+        }
+    ));
+    assert!(signed_in_profile(&status).is_some());
+    assert!(granted(&status).contains(&Feature::Playlists));
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc2");
+}
+
+#[tokio::test]
+async fn cancel_after_spotify_has_answered_keeps_the_new_sign_in() {
+    let h = restored("cancel-after-callback").await;
+    let ora = Arc::clone(&h.ora);
+    let pending = tokio::spawn(async move { ora.sign_in(Some(Feature::Playlists)).await });
+    wait_for_signing_in(&h.ora).await;
+
+    // The store write stalls (an unlock prompt) while the user presses Cancel.
+    h.store.set_delay(Some(Duration::from_millis(150)));
+    h.http.push(
+        200,
+        &tokens_with_scope("acc2", Some("ref2"), &playlist_scopes()),
+    );
+    h.http.push(200, ME);
+    approve_in_browser(&h);
+    wait_for_exchange(&h.ora).await;
+    assert!(matches!(
+        h.ora.cancel_sign_in().auth,
+        AuthState::SignedIn {
+            consenting: true,
+            ..
+        }
+    ));
+
+    let status = pending.await.unwrap().unwrap();
+    assert!(granted(&status).contains(&Feature::Playlists));
+    h.store.set_delay(None);
+    assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref2"));
+    assert!(h.store.value(SESSION).is_some());
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc2");
+}
+
+#[tokio::test]
+async fn sign_out_after_spotify_has_answered_still_deletes_everything() {
+    let h = restored("sign-out-after-callback").await;
+    let ora = Arc::clone(&h.ora);
+    let pending = tokio::spawn(async move { ora.sign_in(Some(Feature::Playlists)).await });
+    wait_for_signing_in(&h.ora).await;
+
+    h.store.set_delay(Some(Duration::from_millis(50)));
+    h.http.push(
+        200,
+        &tokens_with_scope("acc2", Some("ref2"), &playlist_scopes()),
+    );
+    h.http.push(200, ME);
+    approve_in_browser(&h);
+    wait_for_exchange(&h.ora).await;
+    h.ora.sign_out().await.unwrap();
+
+    assert_eq!(pending.await.unwrap().err(), Some(OraError::Cancelled));
+    assert_eq!(h.ora.status().auth, AuthState::SignedOut);
+    assert_eq!(h.store.value(REFRESH_TOKEN), None);
+    assert_eq!(h.store.value(SESSION), None);
+}
+
+#[tokio::test]
+async fn a_refresh_of_the_old_session_never_lands_on_the_new_one() {
+    let h = restored("refresh-meets-new-session").await;
+    if let Auth::SignedIn(session) = &mut h.ora.lock().auth {
+        session.access = Some((Secret::new("old"), Instant::now()));
+    }
+    let ora = Arc::clone(&h.ora);
+    let pending = tokio::spawn(async move { ora.sign_in(Some(Feature::Playlists)).await });
+    wait_for_signing_in(&h.ora).await;
+
+    // The old session's slow refresh rotates its token and only answers after the new sign-in
+    // has its tokens and profile. Replies go out in the order requests finish.
+    h.http.set_delay(Some(Duration::from_millis(300)));
+    let before = h.http.requests().len();
+    let ora = Arc::clone(&h.ora);
+    let refreshing = tokio::spawn(async move { ora.fresh_access().await });
+    while h.http.requests().len() == before {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    h.http.set_delay(Some(Duration::from_millis(10)));
+    h.http.push(
+        200,
+        &tokens_with_scope("acc3", Some("ref3"), &playlist_scopes()),
+    );
+    h.http.push(200, ME);
+    h.http.push(200, &tokens_json("acc2", Some("ref2")));
+    approve_in_browser(&h);
+
+    assert!(pending.await.unwrap().is_ok());
+    assert_eq!(refreshing.await.unwrap().unwrap().expose(), "acc2");
+    h.http.set_delay(None);
+    let requests = h.http.requests().len();
+    assert_eq!(h.ora.fresh_access().await.unwrap().expose(), "acc3");
+    assert_eq!(h.http.requests().len(), requests);
+    assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref3"));
+    assert!(granted(&h.ora.status()).contains(&Feature::Playlists));
+}
+
+#[tokio::test]
+async fn a_new_client_id_stops_a_restore_that_is_still_reading_the_store() {
+    let h = harness("restore-meets-client-id", User::Ignore);
+    h.store.insert(REFRESH_TOKEN, "ref1");
+    h.store.insert(
+        SESSION,
+        &format!(
+            r#"{{"authorizedAt":1,"scopes":"user-read-private","accountId":null,"clientId":"{CLIENT_ID}"}}"#
+        ),
+    );
+    h.store.set_delay(Some(Duration::from_millis(100)));
+    let ora = Arc::clone(&h.ora);
+    let restoring = tokio::spawn(async move { ora.restore().await });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    h.ora
+        .set_client_id("fedcba9876543210fedcba9876543210")
+        .await
+        .unwrap();
+    restoring.await.unwrap();
+
+    assert_eq!(h.ora.status().auth, AuthState::SignedOut);
+    assert!(h.http.requests().is_empty());
+    h.store.set_delay(None);
+    assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref1"));
 }

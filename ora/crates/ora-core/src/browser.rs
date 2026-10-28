@@ -28,15 +28,19 @@ pub fn is_authorize_url(url: &str) -> bool {
             .is_ok_and(|u| u.host_str() == Some("accounts.spotify.com") && u.path() == "/authorize")
 }
 
+/// Plain `https://open.spotify.com`: no other scheme, port or credentials.
+pub(crate) fn is_open_spotify(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("open.spotify.com")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
 /// A normalised `https://open.spotify.com/...` URL, or `None` for anything else.
 pub fn spotify_page(url: &str) -> Option<String> {
     let parsed = Url::parse(url).ok()?;
-    let valid = parsed.scheme() == "https"
-        && parsed.host_str() == Some("open.spotify.com")
-        && parsed.port().is_none()
-        && parsed.username().is_empty()
-        && parsed.password().is_none()
-        && parsed.path().len() > 1;
+    let valid = is_open_spotify(&parsed) && parsed.path().len() > 1;
     valid.then(|| parsed.to_string())
 }
 

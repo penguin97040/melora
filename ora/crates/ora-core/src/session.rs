@@ -8,6 +8,12 @@
 //! - Credential-store writes and deletions take turns behind one gate, and a write first checks
 //!   the generation, so a sign-out's deletion always lands after any write that beat it.
 //! - The store never holds more than the UI admits to: a session-only sign-in leaves it empty.
+//! - Signing in again for an extra permission keeps the current session working until the new one
+//!   is ready; cancelling it bumps only the attempt counter, so nothing of the kept session is lost.
+//! - Once Spotify's callback has arrived, Cancel can't stop the sign-in (its tokens may already be
+//!   on their way into the store); sign-out still can.
+//! - A new session replaces the old one while holding `refresh_gate`, so a refresh of the old one
+//!   finishes first, and a refresh's result only ever reaches the session it started from.
 //! - No lock is held across network or credential-store I/O.
 
 use crate::{
@@ -54,6 +60,8 @@ pub struct Options {
 }
 
 struct Session {
+    /// Which session this is, so a refresh's result never lands on a newer one.
+    id: u64,
     refresh: Secret,
     access: Option<(Secret, Instant)>,
     profile: Option<Profile>,
@@ -65,7 +73,6 @@ struct Session {
 enum Auth {
     NotConfigured,
     SignedOut,
-    SigningIn,
     /// Boxed: a session is much larger than the other states.
     SignedIn(Box<Session>),
     SessionExpired,
@@ -75,11 +82,19 @@ struct Inner {
     client_id: Option<ClientId>,
     from_environment: bool,
     auth: Auth,
-    /// What to return to if the current sign-in is cancelled or fails.
-    before_sign_in: Option<Auth>,
+    /// A sign-in waiting in the browser. `auth` stays what it was until it completes.
+    pending: Option<Pending>,
+    /// The last `Session::id` given out.
+    sessions: u64,
     last_error: Option<OraError>,
     /// Shown in the UI so the Dashboard entry always matches what is sent.
     redirect_uri: String,
+}
+
+struct Pending {
+    attempt: u64,
+    /// Spotify's callback has arrived and the tokens are being fetched and saved.
+    exchanging: bool,
 }
 
 pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
@@ -94,6 +109,8 @@ pub struct Ora<H: HttpClient, S: CredentialStore, B: Browser> {
     inner: Mutex<Inner>,
     /// Bumped (while holding `inner`) by sign-out, cancel and Client ID changes.
     generation: watch::Sender<u64>,
+    /// Bumped by each sign-in and by cancel; a sign-in waiting in the browser stops when it moves.
+    attempts: watch::Sender<u64>,
     /// Serialises refreshes so concurrent callers share one token request.
     refresh_gate: tokio::sync::Mutex<()>,
     /// Serialises credential-store writes and deletions (see the module rules).
@@ -117,7 +134,8 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             },
             client_id: loaded.client_id,
             from_environment: loaded.from_environment,
-            before_sign_in: None,
+            pending: None,
+            sessions: 0,
             last_error: loaded.error,
             redirect_uri: registered_redirect_uri(options.callback_port),
         };
@@ -133,6 +151,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             callback_port: options.callback_port,
             inner: Mutex::new(inner),
             generation: watch::Sender::new(0),
+            attempts: watch::Sender::new(0),
             refresh_gate: tokio::sync::Mutex::new(()),
             store_gate: tokio::sync::Mutex::new(()),
             status,
@@ -255,10 +274,14 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             Ok((Some(refresh), metadata)) => {
                 let scopes = metadata.as_ref().map(saved_scopes).unwrap_or_default();
                 let restored = self.update(|inner, ora| {
+                    // The Client ID check is a second guard: changing it bumps the generation.
                     let current = ora.current_generation() == generation
-                        && matches!(inner.auth, Auth::SignedOut);
+                        && matches!(inner.auth, Auth::SignedOut)
+                        && inner.pending.is_none()
+                        && inner.client_id.as_ref() == Some(&client_id);
                     if current {
                         inner.auth = Auth::SignedIn(Box::new(Session {
+                            id: next_session(inner),
                             refresh,
                             access: None,
                             profile: None,
@@ -279,12 +302,12 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 
     /// Signs in, asking for what sign-in and the profile need, everything the current sign-in
     /// already has, and the scopes of `extra` (for example `EmbeddedPlayback`). Signing in again
-    /// while signed in is how a feature gets Spotify's extra permission; cancelling keeps the
-    /// existing sign-in.
+    /// while signed in is how a feature gets Spotify's extra permission: the current sign-in keeps
+    /// working until the new one is ready, and cancelling keeps it.
     pub async fn sign_in(&self, extra: Option<Feature>) -> Result<Status, OraError> {
         let started = self.update(|inner, ora| {
             let client_id = inner.client_id.clone().ok_or(OraError::NotConfigured)?;
-            if matches!(inner.auth, Auth::SigningIn) {
+            if inner.pending.is_some() {
                 // One sign-in at a time. Its browser tab is already open, and a fixed callback
                 // port can't be bound twice; Cancel ends it.
                 return Ok(None);
@@ -297,23 +320,36 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             if let Auth::SignedIn(session) = &inner.auth {
                 scopes.extend(session.scopes.iter().cloned());
             }
-            let previous = std::mem::replace(&mut inner.auth, Auth::SigningIn);
-            inner.before_sign_in = Some(previous);
+            ora.attempts.send_modify(|a| *a += 1);
+            let attempt = *ora.attempts.borrow();
+            inner.pending = Some(Pending {
+                attempt,
+                exchanging: false,
+            });
             inner.last_error = None;
-            Ok::<_, OraError>(Some((client_id, scopes, ora.current_generation())))
+            Ok::<_, OraError>(Some((client_id, scopes, ora.current_generation(), attempt)))
         })?;
-        let Some((client_id, scopes, generation)) = started else {
+        let Some((client_id, scopes, generation, attempt)) = started else {
             return Ok(self.status());
         };
-        match self.sign_in_flow(&client_id, &scopes, generation).await {
-            Ok(()) => {
-                let _ = self.load_profile().await;
+        match self
+            .sign_in_flow(&client_id, &scopes, generation, attempt)
+            .await
+        {
+            Ok(None) => Ok(self.status()),
+            Ok(Some(error)) => {
+                // Signed in, but the profile didn't load with the new token.
+                if matches!(error, ApiError::Unauthorized) {
+                    let _ = self.profile_after_unauthorised().await;
+                } else if let ApiError::Other(error) = error {
+                    self.record(error);
+                }
                 Ok(self.status())
             }
             Err(error) => {
-                self.update(|inner, ora| {
-                    if ora.current_generation() == generation {
-                        inner.auth = inner.before_sign_in.take().unwrap_or(Auth::SignedOut);
+                self.update(|inner, _| {
+                    if inner.pending.as_ref().is_some_and(|p| p.attempt == attempt) {
+                        inner.pending = None;
                         if error != OraError::Cancelled {
                             inner.last_error = Some(error.clone());
                         }
@@ -324,12 +360,15 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         }
     }
 
+    /// The browser flow up to the new session. `Ok(Some(_))` is a completed sign-in whose
+    /// profile couldn't be read.
     async fn sign_in_flow(
         &self,
         client_id: &ClientId,
         scopes: &BTreeSet<String>,
         generation: u64,
-    ) -> Result<(), OraError> {
+        attempt: u64,
+    ) -> Result<Option<ApiError>, OraError> {
         let pkce = pkce::generate().map_err(|_| OraError::Unsupported)?;
         let state = pkce::state().map_err(|_| OraError::Unsupported)?;
         let callback =
@@ -359,6 +398,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         })?;
 
         let mut generations = self.generation.subscribe();
+        let mut attempts = self.attempts.subscribe();
         let code = tokio::select! {
             result = callback.wait(&state, self.app_name, self.sign_in_timeout) => {
                 result.map_err(|error| match error {
@@ -370,7 +410,21 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 })?
             }
             _ = generations.wait_for(|g| *g != generation) => return Err(OraError::Cancelled),
+            _ = attempts.wait_for(|a| *a != attempt) => return Err(OraError::Cancelled),
         };
+        // From here on Cancel does nothing (see the module rules).
+        let exchanging = self.update(|inner, ora| match &mut inner.pending {
+            Some(pending)
+                if pending.attempt == attempt && ora.current_generation() == generation =>
+            {
+                pending.exchanging = true;
+                true
+            }
+            _ => false,
+        });
+        if !exchanging {
+            return Err(OraError::Cancelled);
+        }
 
         let tokens =
             oauth::exchange_code(&self.http, client_id, code, &redirect_uri, pkce.verifier)
@@ -390,6 +444,16 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         let refresh = tokens.refresh.ok_or(OraError::SignIn {
             reason: SignInFailure::ExchangeRejected,
         })?;
+        // The profile comes with the new session, so the UI never sees a signed-in account
+        // without one when it already had one.
+        let (profile, profile_error) = match api::me(&self.http, &tokens.access).await {
+            Ok(profile) => (Some(profile), None),
+            Err(error) => (None, Some(error)),
+        };
+
+        // A refresh of the session being replaced finishes first, and none starts until the new
+        // session is in place (see the module rules).
+        let _refreshing = self.refresh_gate.lock().await;
         // Persist before reporting success. Without a usable store, continue for this
         // session only, say so, and leave nothing half-saved behind.
         let metadata = Secret::new(session_metadata(&tokens.scope, client_id));
@@ -409,12 +473,24 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             if ora.current_generation() != generation {
                 return false;
             }
-            inner.before_sign_in = None;
+            inner.pending = None;
             inner.last_error = saved.err().map(|_| OraError::StorageUnavailable);
+            // Another account approved in the browser: nothing of the old one may carry over.
+            let other_account = match (&inner.auth, &profile) {
+                (Auth::SignedIn(old), Some(new)) => old
+                    .profile
+                    .as_ref()
+                    .is_some_and(|old| old.account_id != new.account_id),
+                _ => false,
+            };
+            if other_account {
+                ora.bump_generation();
+            }
             inner.auth = Auth::SignedIn(Box::new(Session {
+                id: next_session(inner),
                 refresh,
                 access: Some((tokens.access, tokens.expires_at)),
-                profile: None,
+                profile,
                 session_only: saved.is_err(),
                 scopes: scope_set(&tokens.scope),
             }));
@@ -425,14 +501,16 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             let _ = self.forget_stored().await;
             return Err(OraError::Cancelled);
         }
-        Ok(())
+        Ok(profile_error)
     }
 
+    /// Stops a sign-in that is waiting in the browser and keeps whatever was there before.
+    /// Once Spotify's callback has arrived it is too late, and the sign-in completes.
     pub fn cancel_sign_in(&self) -> Status {
         self.update(|inner, ora| {
-            if matches!(inner.auth, Auth::SigningIn) {
-                ora.bump_generation();
-                inner.auth = inner.before_sign_in.take().unwrap_or(Auth::SignedOut);
+            if inner.pending.as_ref().is_some_and(|p| !p.exchanging) {
+                inner.pending = None;
+                ora.attempts.send_modify(|a| *a += 1);
             }
         });
         self.status()
@@ -442,7 +520,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     pub async fn sign_out(&self) -> Result<Status, OraError> {
         self.update(|inner, ora| {
             ora.bump_generation();
-            inner.before_sign_in = None;
+            inner.pending = None;
             inner.last_error = None;
             inner.auth = if inner.client_id.is_some() {
                 Auth::SignedOut
@@ -475,14 +553,19 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         }
         let id = ClientId::parse(value)?;
         self.config.save(&id)?;
-        let replaced_session = self.update(|inner, _| {
+        let replaced_session = self.update(|inner, ora| {
             let changed = inner.client_id.as_ref() != Some(&id);
             inner.client_id = Some(id);
             inner.last_error = None;
             if matches!(inner.auth, Auth::NotConfigured) {
                 inner.auth = Auth::SignedOut;
             }
-            changed && !matches!(inner.auth, Auth::SignedOut)
+            if changed {
+                // Even signed out: a `restore` still reading the store must not install the
+                // previous app's sign-in under the new Client ID.
+                ora.bump_generation();
+            }
+            changed && (!matches!(inner.auth, Auth::SignedOut) || inner.pending.is_some())
         });
         if replaced_session {
             // Tokens belong to the previous Spotify app.
@@ -509,6 +592,30 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             .authorised(|access| async move { api::me(&self.http, &access).await })
             .await
             .map_err(|e| self.record(e))?;
+        self.set_profile(generation, &profile);
+        Ok(Some(profile))
+    }
+
+    /// After a new sign-in's first `GET /me` came back 401: what `authorised` does next, a
+    /// refresh and one more read.
+    async fn profile_after_unauthorised(&self) -> Result<Option<Profile>, OraError> {
+        let generation = self.current_generation();
+        let stale = self.fresh_access().await.map_err(|e| self.record(e))?;
+        let access = self
+            .forced_refresh(&stale)
+            .await
+            .map_err(|e| self.record(e))?;
+        match api::me(&self.http, &access).await {
+            Ok(profile) => {
+                self.set_profile(generation, &profile);
+                Ok(Some(profile))
+            }
+            Err(ApiError::Unauthorized) => Err(self.expire(generation).await),
+            Err(ApiError::Other(error)) => Err(self.record(error)),
+        }
+    }
+
+    fn set_profile(&self, generation: u64, profile: &Profile) {
         self.update(|inner, ora| {
             if ora.current_generation() == generation {
                 if let Auth::SignedIn(session) = &mut inner.auth {
@@ -516,7 +623,6 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 }
             }
         });
-        Ok(Some(profile))
     }
 
     /// Runs a Web API call with a fresh token. A 401 refreshes once and replays once; a second
@@ -554,7 +660,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             Auth::SignedIn(_) => Err(OraError::NeedsScope { feature }),
             Auth::SessionExpired => Err(OraError::SessionExpired),
             Auth::NotConfigured => Err(OraError::NotConfigured),
-            Auth::SignedOut | Auth::SigningIn => Err(OraError::SignedOut),
+            Auth::SignedOut => Err(OraError::SignedOut),
         }
     }
 
@@ -604,12 +710,15 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     /// Only called while holding `refresh_gate`.
     async fn refresh_now(&self) -> Result<Secret, OraError> {
         let generation = self.current_generation();
-        let (client_id, refresh, session_only) = {
+        let (client_id, refresh, session_only, session_id) = {
             let inner = self.lock();
             match (&inner.client_id, &inner.auth) {
-                (Some(id), Auth::SignedIn(session)) => {
-                    (id.clone(), session.refresh.clone(), session.session_only)
-                }
+                (Some(id), Auth::SignedIn(session)) => (
+                    id.clone(),
+                    session.refresh.clone(),
+                    session.session_only,
+                    session.id,
+                ),
                 (None, _) => return Err(OraError::NotConfigured),
                 _ => return Err(OraError::SignedOut),
             }
@@ -645,6 +754,9 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 return false;
             }
             if let Auth::SignedIn(session) = &mut inner.auth {
+                if session.id != session_id {
+                    return false;
+                }
                 session.access = Some((tokens.access, tokens.expires_at));
                 if let Some(rotated) = tokens.refresh {
                     session.refresh = rotated;
@@ -674,6 +786,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 return false;
             }
             ora.bump_generation();
+            inner.pending = None;
             inner.auth = Auth::SessionExpired;
             inner.last_error = Some(OraError::SessionExpired);
             true
@@ -688,14 +801,15 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
 fn snapshot(inner: &Inner) -> Status {
     Status {
         auth: match &inner.auth {
-            Auth::NotConfigured => AuthState::NotConfigured,
-            Auth::SignedOut => AuthState::SignedOut,
-            Auth::SigningIn => AuthState::SigningIn,
             Auth::SignedIn(session) => AuthState::SignedIn {
                 profile: session.profile.clone(),
                 session_only: session.session_only,
                 granted: granted_features(&session.scopes),
+                consenting: inner.pending.is_some(),
             },
+            _ if inner.pending.is_some() => AuthState::SigningIn,
+            Auth::NotConfigured => AuthState::NotConfigured,
+            Auth::SignedOut => AuthState::SignedOut,
             Auth::SessionExpired => AuthState::SessionExpired,
         },
         client_id_from_environment: inner.from_environment,
@@ -703,6 +817,11 @@ fn snapshot(inner: &Inner) -> Status {
         redirect_uri: inner.redirect_uri.clone(),
         last_error: inner.last_error.clone(),
     }
+}
+
+fn next_session(inner: &mut Inner) -> u64 {
+    inner.sessions += 1;
+    inner.sessions
 }
 
 /// Deletes both entries, attempting each, and reports either failure.

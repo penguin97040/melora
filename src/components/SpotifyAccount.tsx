@@ -29,6 +29,8 @@ function stateLine(status: SpotifyStatus | null): string {
     case 'sessionExpired':
       return 'Your Spotify sign-in has expired. Sign in again.';
     case 'signedIn':
+      if (status.auth.consenting)
+        return 'Waiting for you to approve the new permission in your browser…';
       if (status.auth.profile) return `Signed in as ${accountName(status)}.`;
       return profileFailed(status)
         ? 'Signed in, but your Spotify profile couldn’t be loaded.'
@@ -42,6 +44,9 @@ export function SpotifyAccount({ status }: { status: SpotifyStatus | null }) {
   const [message, setMessage] = useState<string | null>(null);
   const desktop = hasNativeStorage();
   const kind = status?.auth.kind;
+  const waiting =
+    kind === 'signingIn' ||
+    (status?.auth.kind === 'signedIn' && status.auth.consenting);
   const redirectUri = status?.redirectUri;
 
   async function run(action: () => Promise<unknown>): Promise<boolean> {
@@ -148,7 +153,7 @@ export function SpotifyAccount({ status }: { status: SpotifyStatus | null }) {
             Sign in with Spotify
           </button>
         )}
-        {kind === 'signingIn' && (
+        {waiting && (
           <button
             className="action-button"
             disabled={busy}

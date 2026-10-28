@@ -15,4 +15,9 @@ sessionOnly: boolean,
  * Features whose scopes this sign-in covers. Others need `sign_in` with that feature,
  * which asks Spotify for the extra permission.
  */
-granted: Array<Feature>, } | { "kind": "sessionExpired" };
+granted: Array<Feature>, 
+/**
+ * A sign-in for an extra permission is waiting in the browser. This sign-in keeps
+ * working meanwhile, and `cancel_sign_in` ends the wait.
+ */
+consenting: boolean, } | { "kind": "sessionExpired" };

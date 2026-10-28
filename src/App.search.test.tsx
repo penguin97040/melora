@@ -63,6 +63,7 @@ function signedIn(): SpotifyStatus {
         spotifyUrl: null,
       },
       sessionOnly: false,
+      consenting: false,
       granted: ['SignIn', 'Search'],
     },
     clientIdFromEnvironment: false,

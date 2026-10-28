@@ -36,6 +36,9 @@ pub enum AuthState {
         /// Features whose scopes this sign-in covers. Others need `sign_in` with that feature,
         /// which asks Spotify for the extra permission.
         granted: Vec<Feature>,
+        /// A sign-in for an extra permission is waiting in the browser. This sign-in keeps
+        /// working meanwhile, and `cancel_sign_in` ends the wait.
+        consenting: bool,
     },
     /// Spotify no longer accepts the saved sign-in (for example after six months).
     SessionExpired,

@@ -104,6 +104,7 @@ function signIn(granted: Feature[]) {
           spotifyUrl: null,
         },
         sessionOnly: false,
+        consenting: false,
         granted,
       }),
     ),

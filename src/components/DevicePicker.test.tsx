@@ -25,7 +25,13 @@ vi.mock('../native/client', () => ({
 
 function spotify(granted: Feature[]): SpotifyStatus {
   return {
-    auth: { kind: 'signedIn', profile: null, sessionOnly: false, granted },
+    auth: {
+      kind: 'signedIn',
+      profile: null,
+      sessionOnly: false,
+      granted,
+      consenting: false,
+    },
     clientIdFromEnvironment: false,
     clientIdHint: null,
     lastError: null,

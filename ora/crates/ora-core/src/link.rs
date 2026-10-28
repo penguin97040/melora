@@ -95,12 +95,7 @@ pub fn parse(input: &str) -> Option<SpotifyUri> {
         };
     }
     let url = Url::parse(input).ok()?;
-    let valid = url.scheme() == "https"
-        && url.host_str() == Some("open.spotify.com")
-        && url.port().is_none()
-        && url.username().is_empty()
-        && url.password().is_none();
-    if !valid {
+    if !crate::browser::is_open_spotify(&url) {
         return None;
     }
     let mut segments: Vec<&str> = url.path_segments()?.filter(|s| !s.is_empty()).collect();

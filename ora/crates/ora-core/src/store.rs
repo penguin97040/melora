@@ -130,6 +130,8 @@ pub mod mock {
         pub unavailable: Arc<AtomicBool>,
         pub fail_writes: Arc<AtomicBool>,
         pub fail_deletes: Arc<AtomicBool>,
+        /// How long each read and write takes, like a store waiting on an unlock prompt.
+        delay: Arc<Mutex<Option<std::time::Duration>>>,
     }
 
     impl MemoryStore {
@@ -144,7 +146,16 @@ pub mod mock {
                 .insert(key.to_owned(), value.to_owned());
         }
 
+        pub fn set_delay(&self, delay: Option<std::time::Duration>) {
+            *self.delay.lock().unwrap() = delay;
+        }
+
         fn check(&self, flag: &AtomicBool) -> Result<(), StoreError> {
+            // Store calls run on blocking threads, so a blocking sleep is what a slow store does.
+            let delay = *self.delay.lock().unwrap();
+            if let Some(delay) = delay {
+                std::thread::sleep(delay);
+            }
             if self.unavailable.load(Ordering::SeqCst) {
                 return Err(StoreError::Unavailable);
             }
