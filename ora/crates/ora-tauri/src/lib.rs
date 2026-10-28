@@ -8,12 +8,13 @@ use ora_core::{
     http::ReqwestClient,
     store::KeyringStore,
     types::{
-        CatalogPage, Device, Feature, OraError, PlayRequest, PlaybackStatus, PlayerCommand,
-        PlaylistPage, PlaylistSummary, Profile, QueueView, SdkEvent, SearchKind, SearchResults,
-        Status, TrackPage,
+        AuthState, CatalogPage, Device, Feature, OraError, PlayRequest, PlaybackStatus,
+        PlayerCommand, PlaylistPage, PlaylistSummary, Profile, QueueView, SdkEvent, SearchKind,
+        SearchResults, Status, TrackPage,
     },
-    Options, Ora,
+    watch, Options, Ora,
 };
+use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{
@@ -23,6 +24,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
+    async_runtime::JoinHandle,
     ipc::Channel,
     plugin::{Builder, TauriPlugin},
     AppHandle, Manager, Runtime, State, Window,
@@ -63,6 +65,64 @@ impl Bridge {
             *channel = None;
             Err(OraError::NoActiveDevice)
         }
+    }
+}
+
+/// The task forwarding each status stream to the page. A reload (or React's development double
+/// mount) subscribes again, and the old task, whose page has gone, is stopped: its channel's
+/// `send` keeps succeeding as long as the webview exists, so it would never stop by itself.
+#[derive(Default)]
+struct Forwarders {
+    status: Mutex<Option<JoinHandle<()>>>,
+    playback: Mutex<Option<JoinHandle<()>>>,
+}
+
+/// Sends the current value, then every change, until the channel fails or a newer
+/// subscription replaces this one.
+fn forward<T>(
+    mut updates: watch::Receiver<T>,
+    channel: Channel<T>,
+    slot: &Mutex<Option<JoinHandle<()>>>,
+) -> Result<(), OraError>
+where
+    T: Clone + Serialize + Send + Sync + 'static,
+{
+    let first = updates.borrow_and_update().clone();
+    channel.send(first).map_err(|_| OraError::Unsupported)?;
+    let task = tauri::async_runtime::spawn(async move {
+        while updates.changed().await.is_ok() {
+            let next = updates.borrow_and_update().clone();
+            if channel.send(next).is_err() {
+                break;
+            }
+        }
+    });
+    let previous = slot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .replace(task);
+    if let Some(previous) = previous {
+        previous.abort();
+    }
+    Ok(())
+}
+
+/// The signed-in account as far as playback cares: `None` signed out, `Some(None)` signed in
+/// before the profile has loaded.
+fn account(status: &Status) -> Option<Option<String>> {
+    match &status.auth {
+        AuthState::SignedIn { profile, .. } => Some(profile.as_ref().map(|p| p.account_id.clone())),
+        _ => None,
+    }
+}
+
+/// Whether the SDK must stop: the sign-in ended (sign-out, expiry, a new Client ID), or
+/// another account replaced it.
+fn session_ended(before: &Option<Option<String>>, now: &Option<Option<String>>) -> bool {
+    match (before, now) {
+        (Some(_), None) => true,
+        (Some(Some(before)), Some(Some(now))) => before != now,
+        _ => false,
     }
 }
 
@@ -159,6 +219,26 @@ pub fn init<R: Runtime>(config: OraConfig<R>) -> TauriPlugin<R> {
             ));
             app.manage(Shared(Arc::clone(&core)));
             app.manage(Bridge(Mutex::new(None)));
+            app.manage(Forwarders::default());
+            // Every way a sign-in ends stops embedded playback, not only the Sign out button.
+            let watched = Arc::clone(&core);
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut updates = watched.subscribe();
+                let mut before = account(&updates.borrow_and_update());
+                while updates.changed().await.is_ok() {
+                    let now = account(&updates.borrow_and_update());
+                    if session_ended(&before, &now)
+                        && watched
+                            .playback()
+                            .command(PlayerCommand::Disconnect)
+                            .is_ok()
+                    {
+                        let _ = handle.state::<Bridge>().send(PlayerCommand::Disconnect);
+                    }
+                    before = now;
+                }
+            });
             tauri::async_runtime::spawn(async move {
                 #[cfg(debug_assertions)]
                 {
@@ -207,19 +287,14 @@ async fn cancel_sign_in<R: Runtime>(
     Ok(ora.0.cancel_sign_in())
 }
 
-/// Also stops embedded playback: the SDK must not keep playing for a signed-out account.
+/// Embedded playback stops too, through the watcher `init` starts.
 #[tauri::command]
 async fn sign_out<R: Runtime>(
     window: Window<R>,
     ora: State<'_, Shared>,
-    bridge: State<'_, Bridge>,
 ) -> Result<Status, OraError> {
     main_only(&window)?;
-    let status = ora.0.sign_out().await;
-    if ora.0.playback().command(PlayerCommand::Disconnect).is_ok() {
-        let _ = bridge.send(PlayerCommand::Disconnect);
-    }
-    status
+    ora.0.sign_out().await
 }
 
 #[tauri::command]
@@ -246,21 +321,11 @@ async fn profile<R: Runtime>(
 async fn subscribe<R: Runtime>(
     window: Window<R>,
     ora: State<'_, Shared>,
+    forwarders: State<'_, Forwarders>,
     on_status: Channel<Status>,
 ) -> Result<(), OraError> {
     main_only(&window)?;
-    let mut updates = ora.0.subscribe();
-    let first = updates.borrow_and_update().clone();
-    on_status.send(first).map_err(|_| OraError::Unsupported)?;
-    tauri::async_runtime::spawn(async move {
-        while updates.changed().await.is_ok() {
-            let next = updates.borrow_and_update().clone();
-            if on_status.send(next).is_err() {
-                break;
-            }
-        }
-    });
-    Ok(())
+    forward(ora.0.subscribe(), on_status, &forwarders.status)
 }
 
 /// For the sdk-bridge's `getOAuthToken` only: a fresh access token, once the sign-in covers
@@ -318,21 +383,15 @@ async fn sdk_attach<R: Runtime>(
 async fn subscribe_playback<R: Runtime>(
     window: Window<R>,
     ora: State<'_, Shared>,
+    forwarders: State<'_, Forwarders>,
     on_status: Channel<PlaybackStatus>,
 ) -> Result<(), OraError> {
     main_only(&window)?;
-    let mut updates = ora.0.playback().subscribe();
-    let first = updates.borrow_and_update().clone();
-    on_status.send(first).map_err(|_| OraError::Unsupported)?;
-    tauri::async_runtime::spawn(async move {
-        while updates.changed().await.is_ok() {
-            let next = updates.borrow_and_update().clone();
-            if on_status.send(next).is_err() {
-                break;
-            }
-        }
-    });
-    Ok(())
+    forward(
+        ora.0.playback().subscribe(),
+        on_status,
+        &forwarders.playback,
+    )
 }
 
 /// Starts playback on this app's SDK device (a pasted Spotify link, or the last thing played).
@@ -687,4 +746,24 @@ async fn open_in_spotify<R: Runtime>(window: Window<R>, url: String) -> Result<(
     main_only(&window)?;
     let page = browser::spotify_page(&url).ok_or(OraError::Unsupported)?;
     SystemBrowser.open(&page).map_err(|_| OraError::Unsupported)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_stops_when_the_sign_in_ends_or_the_account_changes() {
+        let a = Some(Some("a".to_owned()));
+        let b = Some(Some("b".to_owned()));
+        let loading = Some(None);
+        assert!(session_ended(&a, &None));
+        assert!(session_ended(&loading, &None));
+        assert!(session_ended(&a, &b));
+        // The profile arriving, or staying the same, isn't an ending.
+        assert!(!session_ended(&loading, &a));
+        assert!(!session_ended(&a, &a));
+        assert!(!session_ended(&None, &a));
+        assert!(!session_ended(&None, &None));
+    }
 }

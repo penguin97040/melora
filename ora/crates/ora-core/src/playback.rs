@@ -158,6 +158,16 @@ impl Playback {
                 forget_this_app(status);
                 true
             }
+            SdkEvent::Disconnected => {
+                let changed = device.is_some() || status.tier != Tier::Off;
+                *device = None;
+                // An unsupported webview stays unsupported; anything else can be enabled again.
+                if status.tier != Tier::Unsupported {
+                    status.tier = Tier::Off;
+                }
+                forget_this_app(status);
+                changed
+            }
             SdkEvent::State { state: Some(state) } => match device.as_deref() {
                 Some(id) => {
                     remote.active = None;
@@ -280,7 +290,9 @@ impl Playback {
     }
 
     /// Shows a remote command's expected result until the next refresh confirms it.
-    fn assume(&self, command: &PlayerCommand) {
+    /// `was_paused` is what the command was based on: two quick toggles both sent "pause", so
+    /// both must show paused, not flip twice.
+    fn assume(&self, command: &PlayerCommand, was_paused: bool) {
         self.status.send_modify(|status| {
             let now = now_ms();
             match *command {
@@ -292,7 +304,7 @@ impl Playback {
                             .saturating_add(played)
                             .min(status.duration_ms);
                     }
-                    status.paused = !status.paused;
+                    status.paused = !was_paused;
                     status.updated_at_ms = now;
                 }
                 PlayerCommand::Seek { position_ms } => {
@@ -384,7 +396,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         command: PlayerCommand,
     ) -> Result<Option<PlayerCommand>, OraError> {
         if command != PlayerCommand::Disconnect {
-            if let Some(target) = self.playback().remote_target() {
+            if let Some(target) = self.controlled_remote()? {
                 self.remote_command(target, command).await?;
                 return Ok(None);
             }
@@ -421,17 +433,26 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         Ok(None)
     }
 
-    async fn remote_command(
-        &self,
-        target: RemoteTarget,
-        command: PlayerCommand,
-    ) -> Result<(), OraError> {
+    /// The active remote device, for a command or play request that goes to it; `None` while
+    /// this app plays (or nothing does).
+    fn controlled_remote(&self) -> Result<Option<RemoteTarget>, OraError> {
+        let Some(target) = self.playback().remote_target() else {
+            return Ok(None);
+        };
         self.require(Feature::ConnectControl)?;
         if target.restricted {
             return Err(OraError::Forbidden {
                 hint: ForbiddenHint::Restricted,
             });
         }
+        Ok(Some(target))
+    }
+
+    async fn remote_command(
+        &self,
+        target: RemoteTarget,
+        command: PlayerCommand,
+    ) -> Result<(), OraError> {
         if matches!(command, PlayerCommand::SetVolume { .. }) && !target.supports_volume {
             return Err(OraError::Unsupported);
         }
@@ -456,7 +477,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             }
         })
         .await?;
-        self.playback().assume(&command);
+        self.playback().assume(&command, paused);
         Ok(())
     }
 
@@ -548,16 +569,8 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     /// is playing. With neither, the UI asks for a device to be chosen.
     pub async fn play(&self, request: PlayRequest) -> Result<(), OraError> {
         let start = play_start(request)?;
-        let device = match self.playback().remote_target() {
-            Some(target) => {
-                self.require(Feature::ConnectControl)?;
-                if target.restricted {
-                    return Err(OraError::Forbidden {
-                        hint: ForbiddenHint::Restricted,
-                    });
-                }
-                target.id
-            }
+        let device = match self.controlled_remote()? {
+            Some(target) => target.id,
             None => {
                 self.require(Feature::EmbeddedPlayback)?;
                 self.playback()
@@ -577,16 +590,8 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         let item = link::parse(uri)
             .filter(|item| matches!(item.kind, Kind::Track | Kind::Episode))
             .ok_or(OraError::InvalidSpotifyLink)?;
-        let device = match self.playback().remote_target() {
-            Some(target) => {
-                self.require(Feature::ConnectControl)?;
-                if target.restricted {
-                    return Err(OraError::Forbidden {
-                        hint: ForbiddenHint::Restricted,
-                    });
-                }
-                target.id
-            }
+        let device = match self.controlled_remote()? {
+            Some(target) => target.id,
             None if self.playback().status().tier == Tier::Active => self
                 .playback()
                 .device_id()
@@ -739,9 +744,15 @@ fn this_app(id: &str) -> Device {
     }
 }
 
+/// This app's SDK device is gone, and with it whatever it was playing. Another device's state
+/// (from the Web API) is left alone.
 fn forget_this_app(status: &mut PlaybackStatus) {
     if status.device.as_ref().is_some_and(|device| device.this_app) {
         status.device = None;
+        status.now_playing = None;
+        status.paused = true;
+        status.position_ms = 0;
+        status.duration_ms = 0;
     }
 }
 
@@ -897,6 +908,75 @@ mod tests {
         let status = playback.status();
         assert_eq!(status.tier, Tier::Ready);
         assert_eq!(status.now_playing, None);
+    }
+
+    #[test]
+    fn losing_this_app_s_device_ends_what_it_was_playing() {
+        let lost = [
+            SdkEvent::NotReady {
+                device_id: "device1".into(),
+            },
+            SdkEvent::Error {
+                error: SdkErrorKind::Initialization,
+                message: "Failed".into(),
+            },
+            SdkEvent::Disconnected,
+        ];
+        for event in lost {
+            let playback = Playback::default();
+            ready(&playback);
+            playback.apply(state(format!("spotify:track:{}", id()), "Song"));
+            assert_eq!(playback.status().tier, Tier::Active);
+
+            playback.apply(event.clone());
+            let status = playback.status();
+            assert_eq!(playback.device_id(), None, "{event:?}");
+            assert_eq!(status.device, None, "{event:?}");
+            assert_eq!(status.now_playing, None, "{event:?}");
+            assert!(status.paused, "{event:?}");
+            assert_eq!(
+                (status.position_ms, status.duration_ms),
+                (0, 0),
+                "{event:?}"
+            );
+            // Buttons and media keys stop claiming a device that's gone.
+            assert_eq!(
+                playback.command(PlayerCommand::TogglePlay).err(),
+                Some(OraError::NoActiveDevice)
+            );
+        }
+    }
+
+    #[test]
+    fn a_disconnect_lets_playback_be_enabled_again_but_unsupported_stays() {
+        let playback = Playback::default();
+        ready(&playback);
+        playback.apply(SdkEvent::Disconnected);
+        assert_eq!(playback.status().tier, Tier::Off);
+
+        ready(&playback);
+        playback.apply(SdkEvent::Error {
+            error: SdkErrorKind::Initialization,
+            message: "Failed".into(),
+        });
+        playback.apply(SdkEvent::Disconnected);
+        let status = playback.status();
+        assert_eq!(status.tier, Tier::Unsupported);
+        assert!(status.issue.is_some());
+    }
+
+    #[test]
+    fn a_lost_device_leaves_another_device_s_state_alone() {
+        let playback = Playback::default();
+        ready(&playback);
+        playback.apply_remote(Some(remote_state(phone("phone1", false))));
+        let before = playback.status();
+        playback.apply(SdkEvent::NotReady {
+            device_id: "device1".into(),
+        });
+        let status = playback.status();
+        assert_eq!(status.device, before.device);
+        assert_eq!(status.now_playing, before.now_playing);
     }
 
     #[test]
@@ -1094,15 +1174,21 @@ mod tests {
     fn remote_commands_show_their_result_until_confirmed() {
         let playback = Playback::default();
         playback.apply_remote(Some(remote_state(phone("phone1", false))));
-        playback.assume(&PlayerCommand::TogglePlay);
+        playback.assume(&PlayerCommand::TogglePlay, false);
         assert!(playback.status().paused);
-        playback.assume(&PlayerCommand::Seek { position_ms: 9_000 });
+        // A second press sent before the first was confirmed was also a pause.
+        playback.assume(&PlayerCommand::TogglePlay, false);
+        assert!(playback.status().paused);
+        playback.assume(&PlayerCommand::Seek { position_ms: 9_000 }, true);
         assert_eq!(playback.status().position_ms, 9_000);
-        playback.assume(&PlayerCommand::SetShuffle { state: false });
-        playback.assume(&PlayerCommand::SetRepeat {
-            mode: RepeatMode::Track,
-        });
-        playback.assume(&PlayerCommand::SetVolume { volume: 0.456 });
+        playback.assume(&PlayerCommand::SetShuffle { state: false }, true);
+        playback.assume(
+            &PlayerCommand::SetRepeat {
+                mode: RepeatMode::Track,
+            },
+            true,
+        );
+        playback.assume(&PlayerCommand::SetVolume { volume: 0.456 }, true);
         let status = playback.status();
         assert!(!status.shuffle);
         assert_eq!(status.repeat, RepeatMode::Track);

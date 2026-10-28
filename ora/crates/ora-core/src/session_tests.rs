@@ -2710,3 +2710,41 @@ async fn a_new_client_id_stops_a_restore_that_is_still_reading_the_store() {
     h.store.set_delay(None);
     assert_eq!(h.store.value(REFRESH_TOKEN).as_deref(), Some("ref1"));
 }
+
+fn playing_here(h: &Harness) {
+    use ora_types::{Probe, SdkEvent};
+    h.ora.playback().apply(SdkEvent::Probe {
+        probe: Probe {
+            secure: true,
+            widevine: true,
+            ..Probe::default()
+        },
+    });
+    h.ora.playback().apply(SdkEvent::Ready {
+        device_id: "device1".into(),
+    });
+    assert!(h.ora.playback().device_id().is_some());
+}
+
+#[tokio::test]
+async fn every_way_a_sign_in_ends_stops_playback() {
+    // Sign-out, including the one a new Client ID causes.
+    let h = restored("ended-sign-out").await;
+    playing_here(&h);
+    h.ora
+        .set_client_id("fedcba9876543210fedcba9876543210")
+        .await
+        .unwrap();
+    assert_eq!(h.ora.playback().device_id(), None);
+    assert_eq!(h.ora.playback().status().tier, ora_types::Tier::Off);
+
+    // Spotify no longer accepting the sign-in.
+    let h = signed_in_with_stale_access("ended-expiry").await;
+    playing_here(&h);
+    h.http.push(400, r#"{"error":"invalid_grant"}"#);
+    assert_eq!(
+        h.ora.fresh_access().await.err(),
+        Some(OraError::SessionExpired)
+    );
+    assert_eq!(h.ora.playback().device_id(), None);
+}

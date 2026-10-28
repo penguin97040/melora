@@ -128,6 +128,9 @@ pub enum SdkEvent {
         directive: String,
         origin: String,
     },
+    /// The bridge stopped its player on its own (no token, an initialisation error, a timeout,
+    /// the page going away), so this app is no longer a device.
+    Disconnected,
 }
 
 /// UI → Rust (`plugin:ora|playback_command`) and Rust → bridge.

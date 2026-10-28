@@ -22,6 +22,8 @@ pub mod store;
 
 pub use ora_types as types;
 pub use session::{Options, Ora};
+/// The status streams' type, for the plugin that forwards them.
+pub use tokio::sync::watch;
 
 use ora_types::Feature;
 

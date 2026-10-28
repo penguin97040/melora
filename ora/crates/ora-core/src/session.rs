@@ -469,9 +469,10 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         if saved.is_err() {
             let _ = self.forget_stored_if_current(generation).await;
         }
+        // `Some(true)`: installed, for another account than before.
         let accepted = self.update(|inner, ora| {
             if ora.current_generation() != generation {
-                return false;
+                return None;
             }
             inner.pending = None;
             inner.last_error = saved.err().map(|_| OraError::StorageUnavailable);
@@ -494,12 +495,17 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 session_only: saved.is_err(),
                 scopes: scope_set(&tokens.scope),
             }));
-            true
+            Some(other_account)
         });
-        if !accepted {
-            // Signed out while saving: make sure nothing stays behind.
-            let _ = self.forget_stored().await;
-            return Err(OraError::Cancelled);
+        match accepted {
+            None => {
+                // Signed out while saving: make sure nothing stays behind.
+                let _ = self.forget_stored().await;
+                return Err(OraError::Cancelled);
+            }
+            // The old account's player and devices aren't this one's.
+            Some(true) => self.playback.reset(),
+            Some(false) => {}
         }
         Ok(profile_error)
     }
@@ -517,6 +523,8 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     }
 
     /// Clears memory first, then the credential store, and reports a failed deletion.
+    /// Playback state goes too: nothing may keep playing or be controlled for a signed-out
+    /// account (the plugin also tells the SDK to disconnect).
     pub async fn sign_out(&self) -> Result<Status, OraError> {
         self.update(|inner, ora| {
             ora.bump_generation();
@@ -528,6 +536,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
                 Auth::NotConfigured
             };
         });
+        self.playback.reset();
         match self.forget_stored().await {
             Ok(()) => Ok(self.status()),
             Err(_) => {
@@ -792,6 +801,7 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             true
         });
         if current {
+            self.playback.reset();
             let _ = self.forget_stored().await;
         }
         OraError::SessionExpired

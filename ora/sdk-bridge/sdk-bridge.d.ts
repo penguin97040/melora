@@ -10,6 +10,8 @@ export interface BridgeOptions {
   /** Initial volume, 0 to 1. */
   volume?: number;
   window?: Window & typeof globalThis;
+  /** How long loading and connecting may take, in milliseconds (default 30 s). */
+  timeoutMs?: number;
 }
 
 export interface Bridge {
@@ -17,7 +19,8 @@ export interface Bridge {
   enable(): Promise<boolean>;
   /** Call synchronously from a click, before the first transfer or play. */
   activate(): void;
-  disconnect(): void;
+  /** Stops the player. Rust hears about it unless `quiet` (when Rust asked for it). */
+  disconnect(options?: { quiet?: boolean }): void;
 }
 
 export function install(options: BridgeOptions): Bridge;

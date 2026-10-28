@@ -10,4 +10,4 @@ export type SdkEvent = { "type": "probe", probe: Probe, } | { "type": "ready", d
 /**
  * The SDK's own message (client-side text, never a server body or token).
  */
-message: string, } | { "type": "cspViolation", directive: string, origin: string, };
+message: string, } | { "type": "cspViolation", directive: string, origin: string, } | { "type": "disconnected" };

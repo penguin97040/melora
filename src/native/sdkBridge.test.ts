@@ -10,8 +10,14 @@ type Options = {
 
 class FakePlayer {
   static created: FakePlayer[] = [];
+  /** Makes `connect()` never settle, like a stalled network. */
+  static hang = false;
   listeners = new Map<string, Listener>();
-  connect = vi.fn(async () => true);
+  connect = vi.fn(() =>
+    FakePlayer.hang
+      ? new Promise<boolean>(() => undefined)
+      : Promise.resolve(true),
+  );
   disconnect = vi.fn();
   activateElement = vi.fn(async () => undefined);
   togglePlay = vi.fn(async () => undefined);
@@ -103,6 +109,7 @@ beforeEach(() => {
   tokens = 0;
   tokenFails = false;
   FakePlayer.created = [];
+  FakePlayer.hang = false;
   FakeChannel.created = [];
   delete sdkWindow.Spotify;
   delete sdkWindow.onSpotifyWebPlaybackSDKReady;
@@ -112,8 +119,14 @@ afterEach(() => {
   for (const script of sdkScripts()) script.remove();
 });
 
-function bridge() {
-  return install({ invoke, Channel: FakeChannel, name: 'Melora', volume: 0.5 });
+function bridge(timeoutMs?: number) {
+  return install({
+    invoke,
+    Channel: FakeChannel,
+    name: 'Melora',
+    volume: 0.5,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
 }
 
 describe('sdk-bridge', () => {
@@ -243,6 +256,78 @@ describe('sdk-bridge', () => {
       error: 'authentication',
       message: 'No access token (needsScope).',
     });
+    // Rust hears that the device is gone, so its buttons and media keys stop claiming it.
+    await vi.waitFor(() =>
+      expect(events('disconnected')).toEqual([{ type: 'disconnected' }]),
+    );
+  });
+
+  it('starts afresh after an initialisation error and says the device is gone', async () => {
+    setDrm(true);
+    const playback = bridge();
+    const enabled = playback.enable();
+    await sdkLoads();
+    await expect(enabled).resolves.toBe(true);
+    const first = FakePlayer.created[0]!;
+
+    first.emit('initialization_error', { message: 'Failed to initialise' });
+    expect(first.disconnect).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(events('disconnected')).toHaveLength(1));
+
+    await expect(playback.enable()).resolves.toBe(true);
+    expect(FakePlayer.created).toHaveLength(2);
+  });
+
+  it('reports a disconnect when the page goes away', async () => {
+    setDrm(true);
+    const playback = bridge();
+    const enabled = playback.enable();
+    await sdkLoads();
+    await enabled;
+    window.dispatchEvent(new Event('pagehide'));
+    expect(FakePlayer.created[0]!.disconnect).toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(events('disconnected')).toContainEqual({ type: 'disconnected' }),
+    );
+  });
+
+  it('gives up on an SDK that never loads, and loads it again next time', async () => {
+    setDrm(true);
+    const playback = bridge(300);
+    await expect(playback.enable()).resolves.toBe(false);
+    expect(events('error')).toEqual([
+      {
+        type: 'error',
+        error: 'initialization',
+        message: 'The Spotify player took too long to load.',
+      },
+    ]);
+    for (const script of sdkScripts()) script.remove();
+
+    const again = playback.enable();
+    await sdkLoads();
+    await expect(again).resolves.toBe(true);
+  });
+
+  it('gives up on a connection that never settles', async () => {
+    setDrm(true);
+    FakePlayer.hang = true;
+    const playback = bridge(300);
+    const enabled = playback.enable();
+    await sdkLoads();
+    await expect(enabled).resolves.toBe(false);
+    expect(events('error')).toEqual([
+      {
+        type: 'error',
+        error: 'initialization',
+        message: 'The player took too long to connect to Spotify.',
+      },
+    ]);
+    expect(FakePlayer.created[0]!.disconnect).toHaveBeenCalled();
+    await vi.waitFor(() => expect(events('disconnected')).toHaveLength(1));
+
+    FakePlayer.hang = false;
+    await expect(playback.enable()).resolves.toBe(true);
   });
 
   it('runs commands from Rust and activates synchronously', async () => {
@@ -266,5 +351,8 @@ describe('sdk-bridge', () => {
     expect(player.togglePlay).toHaveBeenCalledTimes(1);
     send({ op: 'disconnect' });
     expect(player.disconnect).toHaveBeenCalledTimes(1);
+    // Rust asked for it, so the bridge doesn't report it back.
+    await Promise.resolve();
+    expect(events('disconnected')).toHaveLength(0);
   });
 });

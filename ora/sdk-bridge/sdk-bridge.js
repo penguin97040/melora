@@ -17,6 +17,8 @@ const MEDIA_CONFIG = [
     audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"' }],
   },
 ];
+// How long loading the SDK, its ready callback and connecting may take before giving up.
+const SDK_TIMEOUT_MS = 30_000;
 const SDK_ERRORS = {
   initialization_error: 'initialization',
   authentication_error: 'authentication',
@@ -31,12 +33,14 @@ const SDK_ERRORS = {
  *   name: string,
  *   volume?: number,
  *   window?: Window & typeof globalThis,
+ *   timeoutMs?: number,
  * }} options
  */
 export function install(options) {
   const { invoke, Channel, name } = options;
   const win = options.window ?? window;
   let volume = options.volume ?? 0.7;
+  const timeoutMs = options.timeoutMs ?? SDK_TIMEOUT_MS;
   let player = null;
   let enabling = null;
   let loading = null;
@@ -119,6 +123,17 @@ export function install(options) {
     return loading;
   }
 
+  /** Rejects with `message` if `promise` hasn't settled in time, so nothing waits forever. */
+  function inTime(promise, message) {
+    let timer;
+    const expired = new Promise((_, reject) => {
+      timer = win.setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+    return Promise.race([promise, expired]).finally(() =>
+      win.clearTimeout(timer),
+    );
+  }
+
   // The album image closest to 300 px wide; entries may carry only a URL.
   function pickImage(images) {
     const list = Array.isArray(images) ? images.filter((i) => i?.url) : [];
@@ -182,7 +197,8 @@ export function install(options) {
         void player.setVolume(command.volume);
         break;
       case 'disconnect':
-        disconnect();
+        // Rust asked, so it already knows.
+        disconnect({ quiet: true });
         break;
       default:
         break;
@@ -226,6 +242,8 @@ export function install(options) {
     for (const [event, kind] of Object.entries(SDK_ERRORS)) {
       created.addListener(event, ({ message }) => {
         void report({ type: 'error', error: kind, message: String(message) });
+        // The player can't recover from this one; a later Enable starts afresh.
+        if (kind === 'initialization' && player === created) disconnect();
       });
     }
     return created;
@@ -238,12 +256,18 @@ export function install(options) {
       await report({ type: 'probe', probe: result });
       const drm = result.widevine || result.playready || result.fairplay;
       if (!result.secure || !drm) return false;
-      const Spotify = await loadSdk();
+      const Spotify = await inTime(
+        loadSdk(),
+        'The Spotify player took too long to load.',
+      );
       const channel = new Channel();
       channel.onmessage = run;
       await invoke('plugin:ora|sdk_attach', { onCommand: channel });
       player = connectPlayer(Spotify);
-      const connected = await player.connect();
+      const connected = await inTime(
+        player.connect(),
+        'The player took too long to connect to Spotify.',
+      );
       if (!connected) {
         await report({
           type: 'error',
@@ -274,10 +298,15 @@ export function install(options) {
     void player?.activateElement?.();
   }
 
-  function disconnect() {
+  /** Stops the player and tells Rust (unless it asked), so nothing shows a device that's gone. */
+  function disconnect({ quiet = false } = {}) {
+    const active = player !== null || enabling !== null;
     player?.disconnect();
     player = null;
     enabling = null;
+    // A load that never finished starts again next time.
+    if (!win.Spotify?.Player) loading = null;
+    if (active && !quiet) void report({ type: 'disconnected' });
   }
 
   return { enable, activate, disconnect };
