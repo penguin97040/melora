@@ -32,19 +32,40 @@ Before you sign in, Melora shows its welcome and points you to Settings:
 
 ## Install
 
-Melora is built from source; see [DEVELOPMENT.md](DEVELOPMENT.md) for the build commands.
+Download Melora from the [latest release](../../releases/latest). Pick the file for your system:
 
-**Windows.** The build makes a portable ZIP, `Melora-<version>-windows-x64.zip`. Extract the whole ZIP to a folder you can write to, such as one in your Documents, and run `Melora.exe`. There is no installer, and the builds are unsigned.
+| File                               | For                                                          |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `Melora-<version>-windows-x64.zip` | Windows (64-bit)                                             |
+| `Melora-<version>-1.x86_64.rpm`    | Fedora on a PC                                               |
+| `Melora-<version>-1.aarch64.rpm`   | Fedora on ARM, including Fedora Asahi Remix on Apple silicon |
+| `Melora_<version>_amd64.deb`       | Ubuntu 22.04 or later, Debian 12 or later, on a PC           |
+| `Melora_<version>_arm64.deb`       | Ubuntu or Debian on ARM                                      |
+| `Melora_<version>_amd64.AppImage`  | other Linux distributions on a PC                            |
 
-**Linux.** The build makes these packages:
+### Windows
 
-| Package                                           | For                                                | Install                                            |
-| ------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
-| `Melora-<version>-1.x86_64.rpm` or `.aarch64.rpm` | Fedora (Asahi Remix on Apple silicon uses aarch64) | `sudo dnf install ./Melora-<version>-1.x86_64.rpm` |
-| `Melora_<version>_amd64.deb` or `_arm64.deb`      | Ubuntu 22.04 or later, Debian 12 or later          | `sudo apt install ./Melora_<version>_amd64.deb`    |
-| `Melora_<version>_amd64.AppImage`                 | other x86_64 distributions                         | `chmod +x` it, then run it                         |
+1. Download the ZIP and extract all of it to a folder you can write to, such as a new folder in your Documents. Melora saves its settings in the `data` folder there, so don't run it from inside the ZIP.
+2. Run `Melora.exe`. There is no installer.
+3. Melora isn't signed, so Windows may say "Windows protected your PC" the first time. Choose **More info**, then **Run anyway**.
 
-The packages add Melora to your app menu and use the system's WebKitGTK. The AppImage carries its own copy, so use a package where there is one. Melora keeps your Spotify sign-in in the desktop's keyring (GNOME Keyring or KWallet), which must be running. To uninstall, run `sudo dnf remove melora` or `sudo apt remove melora`.
+To update, close Melora and extract the new ZIP into the same folder. Your settings in `data` stay.
+
+### Linux
+
+Open a terminal in the folder you downloaded to, then:
+
+- Fedora: `sudo dnf install ./Melora-<version>-1.x86_64.rpm` (or the `.aarch64.rpm`)
+- Ubuntu or Debian: `sudo apt install ./Melora_<version>_amd64.deb` (or the `_arm64.deb`)
+- AppImage: `chmod +x Melora_<version>_amd64.AppImage`, then run it
+
+The packages add Melora to your app menu and use the system's WebKitGTK. The AppImage carries its own copy, so use a package where there is one. Melora keeps your Spotify sign-in in the desktop's keyring (GNOME Keyring or KWallet), which must be running. To update, install the new package the same way. To uninstall, run `sudo dnf remove melora` or `sudo apt remove melora`.
+
+### Checking a download
+
+Each file has a `.sha256` file beside it in the release. On Linux, put both in one folder and run `sha256sum -c <file>.sha256`. On Windows, run `Get-FileHash <file>` in PowerShell and compare it with the `.sha256` file.
+
+You can also build Melora yourself; see [Build it yourself](#build-it-yourself).
 
 ## Set up Spotify (once)
 
