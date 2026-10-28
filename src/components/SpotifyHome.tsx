@@ -158,22 +158,32 @@ function AllowLink({
   );
 }
 
-/** The account's Spotify devices, read once when Home opens (and again on focus). */
-function useDevices(enabled: boolean) {
+/**
+ * The account's Spotify devices, read once when Home opens (and again on focus). `account`
+ * (`null` without the permission) keeps one account's devices from showing for another.
+ */
+function useDevices(account: string | null) {
   const [state, setState] = useState<{
+    account: string | null;
     devices: Device[] | null;
     error: unknown;
-  }>({ devices: null, error: null });
+  }>({ account: null, devices: null, error: null });
   const [reads, setReads] = useState(0);
   useEffect(() => {
-    if (!enabled) return;
+    if (account === null) return;
     let active = true;
     void listDevices().then(
       (devices) => {
-        if (active) setState({ devices, error: null });
+        if (active) setState({ account, devices, error: null });
       },
       (error: unknown) => {
-        if (active) setState((previous) => ({ ...previous, error }));
+        if (active)
+          setState((previous) => ({
+            ...(previous.account === account
+              ? previous
+              : { account, devices: null }),
+            error,
+          }));
       },
     );
     const again = () => setReads((n) => n + 1);
@@ -182,8 +192,10 @@ function useDevices(enabled: boolean) {
       active = false;
       window.removeEventListener('focus', again);
     };
-  }, [enabled, reads]);
-  return enabled ? state : { devices: null, error: null };
+  }, [account, reads]);
+  return account !== null && state.account === account
+    ? state
+    : { devices: null, error: null };
 }
 
 /**
@@ -219,7 +231,7 @@ export function SpotifyHome({
     may('SavedShowsEpisodes') ? `shows:${account}` : null,
     fetchCatalog,
   );
-  const devices = useDevices(may('DevicePicker'));
+  const devices = useDevices(may('DevicePicker') ? account : null);
 
   if (!signedIn)
     return (

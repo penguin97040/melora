@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -305,6 +306,26 @@ describe('Home', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('opens Recently played with only that permission, not the playlists welcome', async () => {
+    signIn(['SignIn', 'RecentlyPlayed']);
+    vi.mocked(recentlyPlayed).mockResolvedValue(
+      tracks(
+        ['A', 'B', 'C', 'D', 'E', 'Earlier'].map((name, i) => row(i, name)),
+      ),
+    );
+    const user = await openNav('Home');
+    const recent = await screen.findByRole('region', {
+      name: 'Recently played',
+    });
+    await user.click(
+      await within(recent).findByRole('button', { name: /See all/ }),
+    );
+    expect(
+      await screen.findByRole('heading', { name: 'Recently Played' }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText('Earlier')).toBeInTheDocument();
+  });
+
   it('asks a signed-out user to sign in', async () => {
     vi.mocked(subscribeSpotify).mockImplementation(async (onStatus) =>
       onStatus(status()),
@@ -327,6 +348,36 @@ describe('Recently Played and the queue', () => {
     ).toBeInTheDocument();
     expect(await screen.findByText('Earlier')).toBeInTheDocument();
     expect(recentlyPlayed).toHaveBeenCalledTimes(1);
+  });
+
+  it('never keeps one account’s list open for another', async () => {
+    let send: (next: SpotifyStatus) => void = () => undefined;
+    const as = (id: string) =>
+      status({
+        kind: 'signedIn',
+        profile: {
+          id,
+          accountId: id,
+          displayName: id,
+          imageUrl: null,
+          spotifyUrl: null,
+        },
+        sessionOnly: false,
+        consenting: false,
+        granted: EVERYTHING,
+      });
+    vi.mocked(subscribeSpotify).mockImplementation(async (onStatus) => {
+      send = onStatus;
+      onStatus(as('user1'));
+    });
+    await openSidebar('Recently Played');
+    expect(await screen.findByText('Earlier')).toBeInTheDocument();
+
+    act(() => send(as('user2')));
+    expect(screen.queryByText('Earlier')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Recently Played' }),
+    ).not.toBeInTheDocument();
   });
 
   it('shows the queue without controls Spotify doesn’t allow', async () => {
@@ -395,6 +446,24 @@ describe('Add to queue', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(song).toHaveFocus();
     expect(addToQueue).not.toHaveBeenCalled();
+  });
+
+  it('gives focus back to the row when a scroll or resize closes the menu', async () => {
+    await openSidebar('Liked Songs');
+    const song = await screen.findByRole('button', { name: /^Liked one/ });
+    for (const close of [
+      () => fireEvent.scroll(document),
+      () => fireEvent(window, new Event('resize')),
+    ]) {
+      song.focus();
+      fireEvent.contextMenu(song, { clientX: 0, clientY: 0 });
+      expect(
+        screen.getByRole('menuitem', { name: 'Add to queue' }),
+      ).toHaveFocus();
+      act(close);
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(song).toHaveFocus();
+    }
   });
 
   it('asks for the permission first', async () => {

@@ -278,12 +278,16 @@ export function useSavedStates(
   };
 }
 
+type Want = { offset: number; attempt: number };
+
 type Loaded<T> = Page<T> & {
   key: string | null;
   /** The last offset loaded, or -1. */
   loaded: number;
+  /** The request that last arrived: a reload asks for offset 0 again, with a new attempt. */
+  done: Want | null;
   error: unknown;
-  failed: { offset: number; attempt: number } | null;
+  failed: Want | null;
 };
 
 const nothing = {
@@ -292,9 +296,13 @@ const nothing = {
   total: 0,
   nextOffset: null,
   loaded: -1,
+  done: null,
   error: null,
   failed: null,
 };
+
+const same = (a: Want | null, b: Want) =>
+  a?.offset === b.offset && a.attempt === b.attempt;
 
 export type Paged<T> = Page<T> & {
   loading: boolean;
@@ -309,33 +317,39 @@ export type Paged<T> = Page<T> & {
 
 /**
  * Pages of a Spotify list, loaded one at a time as they're asked for. A new `key` starts again;
- * `null` loads nothing. `fetchPage` must be a stable function.
+ * `null` loads nothing. `fetchPage` must be a stable function. `account` keeps one account's
+ * rows from ever showing for another under the same key; it isn't passed to `fetchPage`.
  */
 export function usePaged<T>(
   key: string | null,
   fetchPage: (key: string, offset: number) => Promise<Page<T>>,
+  account = '',
 ): Paged<T> {
-  const [want, setWant] = useState({ key, offset: 0, attempt: 0 });
+  const identity = key === null ? null : `${account}\n${key}`;
+  const [want, setWant] = useState({ key: identity, offset: 0, attempt: 0 });
   const [data, setData] = useState<Loaded<T>>(nothing);
-  if (want.key !== key) setWant({ key, offset: 0, attempt: 0 });
+  if (want.key !== identity) setWant({ key: identity, offset: 0, attempt: 0 });
 
   const { offset, attempt } = want;
   const wantKey = want.key;
   useEffect(() => {
     if (wantKey === null) return;
     let active = true;
-    void fetchPage(wantKey, offset).then(
+    const asked = { offset, attempt };
+    void fetchPage(wantKey.slice(wantKey.indexOf('\n') + 1), offset).then(
       (page) => {
         if (!active) return;
         setData((previous) => {
-          const same = previous.key === wantKey && offset > 0;
-          if (same && previous.loaded >= offset) return previous;
+          const more = previous.key === wantKey && offset > 0;
+          if (more && previous.loaded >= offset)
+            return { ...previous, done: asked };
           return {
             key: wantKey,
-            items: same ? [...previous.items, ...page.items] : page.items,
+            items: more ? [...previous.items, ...page.items] : page.items,
             total: page.total,
             nextOffset: page.nextOffset,
             loaded: offset,
+            done: asked,
             error: null,
             failed: null,
           };
@@ -347,7 +361,7 @@ export function usePaged<T>(
           ...(previous.key === wantKey ? previous : nothing),
           key: wantKey,
           error,
-          failed: { offset, attempt },
+          failed: asked,
         }));
       },
     );
@@ -356,12 +370,11 @@ export function usePaged<T>(
     };
   }, [wantKey, offset, attempt, fetchPage]);
 
-  const current: Loaded<T> = data.key === key ? data : nothing;
-  const failedNow =
-    current.failed?.offset === want.offset &&
-    current.failed.attempt === want.attempt;
-  // `loaded` is -1 before the first page, so a new list counts as loading straight away.
-  const loading = key !== null && current.loaded < want.offset && !failedNow;
+  const current: Loaded<T> = data.key === identity ? data : nothing;
+  const failedNow = same(current.failed, want);
+  // Loading until the page asked for arrives: a new list straight away, and a reload too, so
+  // nothing loads more from the old rows meanwhile.
+  const loading = identity !== null && !same(current.done, want) && !failedNow;
   return {
     items: current.items,
     total: current.total,
@@ -369,14 +382,21 @@ export function usePaged<T>(
     loading,
     error: failedNow ? current.error : null,
     loadMore: () => {
-      if (current.nextOffset !== null && !loading)
-        setWant({ key, offset: current.nextOffset, attempt: 0 });
+      const next = current.nextOffset;
+      if (next === null || loading) return;
+      // Asking for the page already asked for changes nothing and keeps its attempt, so a
+      // failed page waits for Try again (`retry`) and nothing re-renders in a loop.
+      setWant((previous) =>
+        previous.key === identity && previous.offset === next
+          ? previous
+          : { key: identity, offset: next, attempt: 0 },
+      );
     },
     retry: () =>
       setWant((previous) => ({ ...previous, attempt: previous.attempt + 1 })),
     edit: (change) =>
       setData((previous) => {
-        if (previous.key !== key) return previous;
+        if (previous.key !== identity) return previous;
         const { items, total, nextOffset } = change(previous);
         return { ...previous, items, total, nextOffset };
       }),
@@ -396,16 +416,18 @@ export function usePaged<T>(
 export function useEndOfList<T>(list: Paged<T>) {
   const end = useRef<HTMLDivElement>(null);
   const { nextOffset, loading, loadMore } = list;
+  // After a failed page the footer offers Try again; scrolling doesn't ask again by itself.
+  const failed = list.error !== null && list.error !== undefined;
   useEffect(() => {
     const element = end.current;
-    if (!element || nextOffset === null || loading) return;
+    if (!element || nextOffset === null || loading || failed) return;
     if (typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) loadMore();
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [nextOffset, loading, loadMore]);
+  }, [nextOffset, loading, failed, loadMore]);
   return end;
 }
 

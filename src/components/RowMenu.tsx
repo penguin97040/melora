@@ -18,9 +18,11 @@ type Props = {
 export function RowMenu({ name, at, items, onClose }: Props) {
   const menu = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
+  const opener = useRef(at.opener);
   useEffect(() => {
     close.current = onClose;
-  }, [onClose]);
+    opener.current = at.opener;
+  }, [onClose, at.opener]);
 
   useLayoutEffect(() => {
     // Kept inside the window: measured once it has its items.
@@ -38,20 +40,28 @@ export function RowMenu({ name, at, items, onClose }: Props) {
     const away = (event: Event) => {
       if (!menu.current?.contains(event.target as Node)) close.current();
     };
+    // Closing without a click elsewhere: focus inside the menu goes back to the row, as on
+    // Escape, rather than to the page.
+    const closeHere = () => {
+      const focused = menu.current?.contains(document.activeElement) === true;
+      close.current();
+      if (focused) opener.current.focus();
+    };
     // Scrolling the menu's own list keeps it open.
     const dismiss = (event: Event) => {
-      if (!menu.current?.contains(event.target as Node)) close.current();
+      if (!menu.current?.contains(event.target as Node)) closeHere();
     };
+    // The window lost focus anyway; it comes back to wherever it was.
     const leave = () => close.current();
     document.addEventListener('mousedown', away, true);
     document.addEventListener('scroll', dismiss, true);
     window.addEventListener('blur', leave);
-    window.addEventListener('resize', leave);
+    window.addEventListener('resize', closeHere);
     return () => {
       document.removeEventListener('mousedown', away, true);
       document.removeEventListener('scroll', dismiss, true);
       window.removeEventListener('blur', leave);
-      window.removeEventListener('resize', leave);
+      window.removeEventListener('resize', closeHere);
     };
   }, []);
 

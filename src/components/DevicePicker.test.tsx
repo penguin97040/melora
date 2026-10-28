@@ -76,6 +76,7 @@ function renderPicker(
 ) {
   const handlers = {
     onVolume: vi.fn(),
+    onVolumeCommit: vi.fn(),
     onCommand: vi.fn(),
     onOpenSettings: vi.fn(),
   };
@@ -113,6 +114,7 @@ describe('playback device', () => {
       spotify: null,
       volume: 70,
       onVolume: vi.fn(),
+      onVolumeCommit: vi.fn(),
       onCommand: vi.fn(),
       onOpenSettings: vi.fn(),
     };
@@ -269,7 +271,7 @@ describe('playback device', () => {
   });
 
   it('uses Melora’s own volume setting while Melora plays', async () => {
-    const { onVolume } = renderPicker(
+    const { onVolume, onVolumeCommit } = renderPicker(
       spotify(control),
       playbackStatus({ tier: 'active' }),
     );
@@ -278,5 +280,9 @@ describe('playback device', () => {
     expect(slider).toHaveValue('70');
     fireEvent.change(slider, { target: { value: '30' } });
     expect(onVolume).toHaveBeenCalledWith(30);
+    // Saved and sent once, on release, not per step of the drag.
+    expect(onVolumeCommit).not.toHaveBeenCalled();
+    fireEvent.pointerUp(slider);
+    expect(onVolumeCommit).toHaveBeenCalledTimes(1);
   });
 });

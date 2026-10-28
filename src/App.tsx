@@ -130,8 +130,11 @@ function quietly(action: () => Promise<unknown>): void {
 
 export default function App() {
   const [view, setView] = useState<View>('Library');
-  // A Spotify list chosen in the sidebar; `null` shows the welcome.
-  const [source, setSource] = useState<ListSource | null>(null);
+  // A Spotify list chosen in the sidebar, and for which account; `null` shows the welcome.
+  const [chosen, setChosen] = useState<{
+    account: string;
+    source: ListSource;
+  } | null>(null);
   const [playMessage, setPlayMessage] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // The kind of Spotify search result "See all" shows, or `null` for the overview.
@@ -146,7 +149,10 @@ export default function App() {
   const [preferencesSettled, setPreferencesSettled] = useState(false);
   const [spotify, setSpotify] = useState<SpotifyStatus | null>(null);
   const [playback, setPlayback] = useState<PlaybackStatus | null>(null);
-  const [likeMessage, setLikeMessage] = useState<string | null>(null);
+  // `id` restarts the timer when the same message shows again ("Added to queue" twice).
+  const [note, setNote] = useState<{ id: number; text: string } | null>(null);
+  const notes = useRef(0);
+  const likeMessage = note?.text ?? null;
   // A row's open context menu; `id` starts a fresh menu when one replaces another.
   const [menu, setMenu] = useState<{
     id: number;
@@ -170,7 +176,9 @@ export default function App() {
   // Keyed to the URL, so a new profile or account gets a fresh attempt.
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const revealRequested = useRef(false);
-  const launchEnabled = useRef(false);
+  // The account Melora last became a Spotify device for, at launch or after a sign-in.
+  const enabledFor = useRef<string | null>(null);
+  const [enableAgain, setEnableAgain] = useState(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -295,14 +303,43 @@ export default function App() {
   const mayPlayHere = playbackAllowed(spotify);
   const tier = playback?.tier;
 
+  const signedInAs =
+    spotify?.auth.kind === 'signedIn' ? (spotify.auth.profile?.id ?? '') : null;
   useEffect(() => {
     // Once playback is allowed, Melora becomes a Spotify device at launch, so it's always in
-    // the device lists. Problems show in Settings → Playback in Melora.
-    if (!mayPlayHere || !preferencesSettled || tier !== 'off') return;
-    if (launchEnabled.current) return;
-    launchEnabled.current = true;
-    quietly(() => enablePlayback(preferences.volume / 100));
-  }, [mayPlayHere, preferencesSettled, tier, preferences.volume]);
+    // the device lists, and again after a sign-out or for another account. Problems show in
+    // Settings → Playback in Melora.
+    if (!mayPlayHere) {
+      enabledFor.current = null;
+      return;
+    }
+    if (!preferencesSettled || tier !== 'off') return;
+    if (enabledFor.current === signedInAs) return;
+    enabledFor.current = signedInAs;
+    let active = true;
+    const again = () => {
+      enabledFor.current = null;
+      setEnableAgain((count) => count + 1);
+    };
+    void enablePlayback(preferences.volume / 100)
+      .catch(() => false)
+      .then((connected) => {
+        // Not straight away, which could repeat a failure in a loop: when the user is back.
+        if (!connected && active) window.addEventListener('focus', again);
+      });
+    return () => {
+      active = false;
+      window.removeEventListener('focus', again);
+    };
+    // `enableAgain` asks for another try after a failed one.
+  }, [
+    mayPlayHere,
+    preferencesSettled,
+    tier,
+    preferences.volume,
+    signedInAs,
+    enableAgain,
+  ]);
 
   useEffect(() => {
     // The active device is read when control becomes possible, on focus, and at a low rate
@@ -322,6 +359,12 @@ export default function App() {
     };
   }, [canControl, hereActive]);
 
+  const nowUrl = playback?.nowPlaying?.spotifyUrl ?? null;
+  // For actions that wait (a sign-in in the browser) and must still be about this item.
+  const latestNowUrl = useRef(nowUrl);
+  useEffect(() => {
+    latestNowUrl.current = nowUrl;
+  }, [nowUrl]);
   const remotePlaying =
     remoteActive &&
     playback !== null &&
@@ -330,20 +373,29 @@ export default function App() {
   const positionMs = playback?.positionMs ?? 0;
   const durationMs = playback?.durationMs ?? 0;
   const updatedAtMs = playback?.updatedAtMs ?? 0;
+  // The item and position of the last read made at a track's end.
+  const endRead = useRef<string | null>(null);
   useEffect(() => {
     // Another device moves to its next track without telling Melora, so read it again just
-    // after this one should have ended (and no more often than every 10 s past the end).
+    // after this one should have ended (and no more often than every 10 s past the end). A
+    // device stuck just short of the end would otherwise be read every few seconds for ever.
     if (!remotePlaying) return;
     const left = durationMs - positionMs - (Date.now() - updatedAtMs);
-    const timer = window.setTimeout(
-      () => quietly(refreshPlayback),
-      left > 0 ? left + TRACK_END_GRACE_MS : 10_000,
-    );
+    const at = `${nowUrl ?? ''}@${positionMs}`;
+    const delay =
+      endRead.current === at
+        ? Math.max(10_000, left + TRACK_END_GRACE_MS)
+        : left > 0
+          ? left + TRACK_END_GRACE_MS
+          : 10_000;
+    const timer = window.setTimeout(() => {
+      endRead.current = at;
+      quietly(refreshPlayback);
+    }, delay);
     return () => window.clearTimeout(timer);
-  }, [remotePlaying, positionMs, durationMs, updatedAtMs]);
+  }, [remotePlaying, positionMs, durationMs, updatedAtMs, nowUrl]);
 
   const mayLike = libraryAllowed(spotify);
-  const nowUrl = playback?.nowPlaying?.spotifyUrl ?? null;
   const likedKnown = playback?.nowPlaying?.liked != null;
   useEffect(() => {
     // Whether a track is liked is asked once per track, and again on focus in case it was
@@ -356,16 +408,25 @@ export default function App() {
   }, [mayLike, nowUrl, likedKnown]);
 
   useEffect(() => {
-    if (likeMessage === null) return;
-    const timer = window.setTimeout(
-      () => setLikeMessage(null),
-      LIKE_MESSAGE_MS,
-    );
+    if (note === null) return;
+    const timer = window.setTimeout(() => setNote(null), LIKE_MESSAGE_MS);
     return () => window.clearTimeout(timer);
-  }, [likeMessage]);
+  }, [note]);
+
+  /** A short confirmation in the player's mode line, for `LIKE_MESSAGE_MS`. */
+  function setLikeMessage(text: string): void {
+    notes.current += 1;
+    setNote({ id: notes.current, text });
+  }
 
   const profile =
     spotify?.auth.kind === 'signedIn' ? spotify.auth.profile : null;
+  // Lists are kept per account, so another account never sees them, even for a moment.
+  const account = profile?.id ?? '';
+  const source =
+    chosen && signedInAs !== null && chosen.account === signedInAs
+      ? chosen.source
+      : null;
   const showPlaylists = granted(spotify, 'Playlists');
   const playlists = usePaged(
     showPlaylists ? `playlists:${profile?.id ?? ''}` : null,
@@ -380,8 +441,9 @@ export default function App() {
     ...playlists,
     items: orderPlaylists(playlists.items, playlistOrder.order),
   };
-  // Signing out, or a sign-in without the permission, goes back to the welcome.
-  const shown = showPlaylists ? source : null;
+  // A playlist needs the playlists permission; every other list asks for its own when it
+  // loads. Signing out (or in as someone else) goes back to the welcome.
+  const shown = source?.kind === 'playlist' && !showPlaylists ? null : source;
   const list = usePaged(
     shown &&
       isTrackList(shown) &&
@@ -389,6 +451,7 @@ export default function App() {
       ? sourceKey(shown)
       : null,
     fetchTracks,
+    account,
   );
   // Read while the queue is open, again whenever the item playing changes.
   const queue = useQueue(
@@ -398,6 +461,7 @@ export default function App() {
   const catalog = usePaged(
     shown && isCatalog(shown) ? sourceKey(shown) : null,
     fetchCatalog,
+    account,
   );
   // Whether the list's tracks (and the album or show itself) are saved, asked per list. Liked
   // Songs are saved by definition.
@@ -422,10 +486,15 @@ export default function App() {
   const more = usePaged(
     searchesSpotify && seeAll && wanted ? searchKey(seeAll, wanted) : null,
     fetchSearchPage,
+    account,
   );
 
   function chooseList(next: ListSource | null): void {
-    setSource(next);
+    setChosen(
+      next && signedInAs !== null
+        ? { account: signedInAs, source: next }
+        : null,
+    );
     setPlayMessage(null);
     setView('Library');
   }
@@ -578,10 +647,16 @@ export default function App() {
     const copies = list.items.filter((row) => row.uri === uri).length;
     list.edit((page) => removeRows(page, uri));
     countPlaylist(id, -copies);
-    editPlaylists(async () => {
-      await removeFromPlaylist(id, [uri]);
-      setLikeMessage(`Removed from ${name || 'the playlist'}`);
-    }, list.reload);
+    editPlaylists(
+      async () => {
+        await removeFromPlaylist(id, [uri]);
+        setLikeMessage(`Removed from ${name || 'the playlist'}`);
+      },
+      () => {
+        countPlaylist(id, copies);
+        list.reload();
+      },
+    );
   }
 
   function addTo(target: PlaylistSummary, uri: string): void {
@@ -697,17 +772,18 @@ export default function App() {
     item: PlaylistSummary,
     index: number,
     at: MenuPoint,
+    move: (to: number) => void,
   ): void {
     const items: MenuItem[] = [
       {
         label: 'Move up',
         disabled: index === 0,
-        onSelect: () => movePlaylist(index, index - 1),
+        onSelect: () => move(index - 1),
       },
       {
         label: 'Move down',
         disabled: index === ordered.items.length - 1,
-        onSelect: () => movePlaylist(index, index + 1),
+        onSelect: () => move(index + 1),
       },
     ];
     if (playlistOrder.order.length > 0)
@@ -720,15 +796,19 @@ export default function App() {
 
   /** The + control. The first use asks Spotify for library access, then carries on. */
   function toggleLike(): void {
+    const clicked = nowUrl;
     void (async () => {
       try {
         if (!mayLike && !libraryAllowed(await allowLibrary())) return;
+        // Approving in the browser takes a while. If another track plays by now, the + that
+        // was pressed belonged to the one before: do nothing rather than like the wrong one.
+        if (latestNowUrl.current !== clicked) return;
         const liked = await toggleLiked();
         setLikeMessage(
           liked ? 'Added to Liked Songs' : 'Removed from Liked Songs',
         );
         // The same song's row + follows.
-        const track = nowUrl?.match(
+        const track = clicked?.match(
           /^https:\/\/open\.spotify\.com\/track\/(\w+)$/,
         );
         if (track) saved.remember([`spotify:track:${track[1]}`], liked);
@@ -744,8 +824,16 @@ export default function App() {
     );
   }
 
-  /** Melora's own volume: saved as the preference and sent to its player when it's on. */
+  /** Melora's own volume while a slider moves: shown, but not saved or sent yet. */
   function setMeloraVolume(volume: number): void {
+    setPreferences((previous) => ({ ...previous, volume }));
+  }
+
+  /**
+   * The slider was let go: saved as the preference and sent to Melora's player when it's on.
+   * Once per change, not once per step of a drag.
+   */
+  function commitMeloraVolume(volume: number): void {
     updatePreferences({ ...preferences, volume });
     // While another device plays, commands go to it; Melora's player keeps the preference.
     if (deviceReady && !remoteActive)
@@ -936,6 +1024,15 @@ export default function App() {
                 value={preferences.volume}
                 disabled={!ready}
                 onChange={(e) => setMeloraVolume(Number(e.target.value))}
+                onPointerUp={(e) =>
+                  commitMeloraVolume(Number(e.currentTarget.value))
+                }
+                onKeyUp={(e) =>
+                  commitMeloraVolume(Number(e.currentTarget.value))
+                }
+                onBlur={(e) =>
+                  commitMeloraVolume(Number(e.currentTarget.value))
+                }
               />
               <p className="settings-note">
                 {hasNativeStorage()
@@ -1038,6 +1135,7 @@ export default function App() {
               playback={playback}
               volume={preferences.volume}
               onVolume={setMeloraVolume}
+              onVolumeCommit={commitMeloraVolume}
               onCommand={playerCommand}
               onOpenSettings={() => setView('Settings')}
             />
@@ -1073,12 +1171,7 @@ export default function App() {
                 className="link-button"
                 onClick={() => {
                   const url = profile.spotifyUrl;
-                  if (url)
-                    void openInSpotify(url).catch(() =>
-                      setWindowMessage(
-                        'Your browser could not be opened. Try again.',
-                      ),
-                    );
+                  if (url) openSpotifyPage(url);
                 }}
               >
                 Open in Spotify

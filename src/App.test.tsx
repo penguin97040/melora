@@ -17,7 +17,7 @@ import {
   subscribeSpotify,
   toggleLiked,
 } from './native/client';
-import type { AppInfo, SpotifyStatus } from './native/client';
+import type { AppInfo, PlaybackStatus, SpotifyStatus } from './native/client';
 import type { Feature } from './native/bindings/Feature';
 import { playbackStatus } from './native/playbackFixture';
 
@@ -387,6 +387,31 @@ describe('device control', () => {
     await waitFor(() => expect(enablePlayback).toHaveBeenCalledTimes(1));
     expect(enablePlayback).toHaveBeenCalledWith(0.7);
   });
+
+  it('turns it on again after signing out and in, and after a failed try', async () => {
+    let send: (status: SpotifyStatus) => void = () => undefined;
+    vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) => {
+      send = onStatus;
+    });
+    vi.mocked(enablePlayback).mockResolvedValueOnce(false);
+    render(<App />);
+    const allowed = signedIn(['SignIn', 'EmbeddedPlayback']);
+    act(() => send(allowed));
+    await waitFor(() => expect(enablePlayback).toHaveBeenCalledTimes(1));
+
+    // The failed try isn't repeated straight away, only once the user is back.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(enablePlayback).toHaveBeenCalledTimes(1);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(enablePlayback).toHaveBeenCalledTimes(2));
+
+    // Signing out stops Melora's player (Rust), so the next sign-in starts it again.
+    act(() => send({ ...allowed, auth: { kind: 'signedOut' } }));
+    act(() => send(signedIn(['SignIn', 'EmbeddedPlayback'])));
+    await waitFor(() => expect(enablePlayback).toHaveBeenCalledTimes(3));
+  });
 });
 
 describe('Liked Songs', () => {
@@ -439,6 +464,75 @@ describe('Liked Songs', () => {
         screen.queryByText('Added to Liked Songs'),
       ).not.toBeInTheDocument();
       expect(screen.getByText(/Shuffle: Off · Repeat: Off/)).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('likes nothing if another track plays by the time access is given', async () => {
+    let sendPlayback: (status: PlaybackStatus) => void = () => undefined;
+    vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) =>
+      onStatus(signedIn(playbackOnly)),
+    );
+    vi.mocked(subscribePlayback).mockImplementationOnce(async (onStatus) => {
+      sendPlayback = onStatus;
+      onStatus(playing());
+    });
+    let approve: (status: SpotifyStatus) => void = () => undefined;
+    vi.mocked(allowLibrary).mockReturnValue(
+      new Promise((resolve) => {
+        approve = resolve;
+      }),
+    );
+    render(<App />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Add to Liked Songs' }),
+    );
+    // While the browser asks, the next track starts.
+    const next = playing();
+    act(() =>
+      sendPlayback({
+        ...next,
+        nowPlaying: {
+          ...next.nowPlaying!,
+          name: 'Next',
+          spotifyUrl: 'https://open.spotify.com/track/y',
+        },
+      }),
+    );
+    await act(async () =>
+      approve(signedIn([...playbackOnly, 'LibrarySaveRemove'])),
+    );
+    expect(toggleLiked).not.toHaveBeenCalled();
+  });
+
+  it('shows the same message again for its full time', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(subscribeSpotify).mockImplementationOnce(async (onStatus) =>
+        onStatus(signedIn([...playbackOnly, 'LibrarySaveRemove'])),
+      );
+      vi.mocked(subscribePlayback).mockImplementationOnce(async (onStatus) =>
+        onStatus(playing()),
+      );
+      vi.mocked(toggleLiked).mockResolvedValue(true);
+      render(<App />);
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const add = await screen.findByRole('button', {
+        name: 'Add to Liked Songs',
+      });
+      await user.click(add);
+      expect(await screen.findByText('Added to Liked Songs')).toBeVisible();
+      await act(async () => {
+        vi.advanceTimersByTime(LIKE_MESSAGE_MS - 1_000);
+      });
+      await user.click(add);
+      await waitFor(() => expect(toggleLiked).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        vi.advanceTimersByTime(LIKE_MESSAGE_MS - 1_000);
+      });
+      // The second one's own time isn't up yet.
+      expect(screen.getByText('Added to Liked Songs')).toBeVisible();
     } finally {
       vi.useRealTimers();
     }

@@ -11,7 +11,10 @@ type Props = {
 /** Spotify's name limit is undocumented; Melora keeps names to this (as `ora-core` does). */
 const MAX_NAME = 100;
 
-/** The sidebar's form for a new private playlist. Escape or Cancel closes it. */
+/**
+ * The sidebar's form for a new private playlist. Escape or Cancel closes it, but not while
+ * it's creating: the playlist is on its way and will open.
+ */
 export function NewPlaylist({ adding, busy, onCreate, onCancel }: Props) {
   const [name, setName] = useState('');
   const input = useRef<HTMLInputElement>(null);
@@ -29,7 +32,7 @@ export function NewPlaylist({ adding, busy, onCreate, onCancel }: Props) {
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault();
-          onCancel();
+          if (!busy) onCancel();
         }
       }}
     >
@@ -55,7 +58,12 @@ export function NewPlaylist({ adding, busy, onCreate, onCancel }: Props) {
         >
           {busy ? 'Creating…' : 'Create'}
         </button>
-        <button type="button" className="link-button" onClick={onCancel}>
+        <button
+          type="button"
+          className="link-button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           Cancel
         </button>
       </span>

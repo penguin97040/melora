@@ -180,7 +180,7 @@ export function ListFooter<T>({
 }
 
 /** A spacer for rows a long list doesn't render. */
-function Spacer({ rows, height }: { rows: number; height: number }) {
+export function Spacer({ rows, height }: { rows: number; height: number }) {
   if (rows <= 0) return null;
   return (
     <tr className="spacer-row" aria-hidden="true">

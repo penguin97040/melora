@@ -127,26 +127,17 @@ export async function signInWithSpotify(): Promise<SpotifyStatus> {
 
 /** Signs in again, asking Spotify for the extra permission embedded playback needs. */
 export async function allowPlayback(): Promise<SpotifyStatus> {
-  requireDesktop();
-  return invoke<SpotifyStatus>('plugin:ora|sign_in', {
-    feature: 'EmbeddedPlayback',
-  });
+  return allowFeature('EmbeddedPlayback');
 }
 
 /** Signs in again, asking Spotify for permission to see and control the account's devices. */
 export async function allowDeviceControl(): Promise<SpotifyStatus> {
-  requireDesktop();
-  return invoke<SpotifyStatus>('plugin:ora|sign_in', {
-    feature: 'ConnectControl',
-  });
+  return allowFeature('ConnectControl');
 }
 
 /** Signs in again, asking Spotify for permission to read and change the account's library. */
 export async function allowLibrary(): Promise<SpotifyStatus> {
-  requireDesktop();
-  return invoke<SpotifyStatus>('plugin:ora|sign_in', {
-    feature: 'LibrarySaveRemove',
-  });
+  return allowFeature('LibrarySaveRemove');
 }
 
 /** Signs in again, asking Spotify for the extra permission `feature` needs. */

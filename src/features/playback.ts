@@ -4,29 +4,21 @@ import type {
   SpotifyStatus,
 } from '../native/client';
 import type { PlaybackIssue } from '../native/bindings/PlaybackIssue';
+import { granted } from './library';
 
 /** The sign-in covers the scopes embedded playback needs. */
 export function playbackAllowed(status: SpotifyStatus | null): boolean {
-  return (
-    status?.auth.kind === 'signedIn' &&
-    status.auth.granted.includes('EmbeddedPlayback')
-  );
+  return granted(status, 'EmbeddedPlayback');
 }
 
 /** The sign-in covers seeing and controlling the account's Spotify devices. */
 export function deviceControlAllowed(status: SpotifyStatus | null): boolean {
-  return (
-    status?.auth.kind === 'signedIn' &&
-    status.auth.granted.includes('ConnectControl')
-  );
+  return granted(status, 'ConnectControl');
 }
 
 /** The sign-in covers reading and changing the library (the player's + control). */
 export function libraryAllowed(status: SpotifyStatus | null): boolean {
-  return (
-    status?.auth.kind === 'signedIn' &&
-    status.auth.granted.includes('LibrarySaveRemove')
-  );
+  return granted(status, 'LibrarySaveRemove');
 }
 
 /** Only tracks get the + for now; Spotify's episode wording isn't settled in Melora. */
@@ -150,11 +142,4 @@ export function positionAt(status: PlaybackStatus, nowMs: number): number {
   if (!isLive(status) || status.paused) return status.positionMs;
   const elapsed = Math.max(0, nowMs - status.updatedAtMs);
   return Math.min(status.durationMs, status.positionMs + elapsed);
-}
-
-export function formatTime(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  const minutes = Math.floor(total / 60);
-  const seconds = String(total % 60).padStart(2, '0');
-  return `${minutes}:${seconds}`;
 }

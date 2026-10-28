@@ -2,7 +2,7 @@ import { countLabel, useEndOfList, useWindow } from '../features/library';
 import type { CatalogSource, Paged } from '../features/library';
 import type { CatalogItem } from '../native/client';
 import type { Feature } from '../native/bindings/Feature';
-import { ListFooter } from './SpotifyList';
+import { ListFooter, Spacer } from './SpotifyList';
 
 type Props = {
   source: CatalogSource;
@@ -18,12 +18,6 @@ export function SpotifyCatalog({ source, list, onOpenItem, onAllow }: Props) {
   const noun = albums ? 'album' : 'podcast';
   const end = useEndOfList(list);
   const [body, rows] = useWindow(list.items.length);
-  const spacer = (count: number) =>
-    count > 0 && (
-      <tr className="spacer-row" aria-hidden="true">
-        <td colSpan={4} style={{ height: count * rows.rowHeight }} />
-      </tr>
-    );
 
   return (
     <>
@@ -56,7 +50,7 @@ export function SpotifyCatalog({ source, list, onOpenItem, onAllow }: Props) {
             </tr>
           </thead>
           <tbody ref={body}>
-            {spacer(rows.start)}
+            <Spacer rows={rows.start} height={rows.rowHeight} />
             {list.items.slice(rows.start, rows.end).map((item) => (
               <tr key={item.position}>
                 <td className="track-number">
@@ -81,7 +75,10 @@ export function SpotifyCatalog({ source, list, onOpenItem, onAllow }: Props) {
                 </td>
               </tr>
             ))}
-            {spacer(list.items.length - rows.end)}
+            <Spacer
+              rows={list.items.length - rows.end}
+              height={rows.rowHeight}
+            />
           </tbody>
         </table>
       </div>

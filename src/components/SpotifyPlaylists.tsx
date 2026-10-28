@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { describeFailure } from '../features/account';
 import { moveKey } from '../features/editing';
 import { countLabel, sourceKey } from '../features/library';
@@ -20,8 +20,16 @@ type Props = {
   /** Moves the playlist shown at `from` to `to` in Melora's order. */
   onMove: (from: number, to: number) => void;
   onUseSpotifyOrder: () => void;
-  /** A playlist's context menu (right-click, the Menu key or Shift+F10). */
-  onMenu: (playlist: PlaylistSummary, index: number, at: MenuPoint) => void;
+  /**
+   * A playlist's context menu (right-click, the Menu key or Shift+F10). Its Move items call
+   * `move`, so focus follows the playlist.
+   */
+  onMenu: (
+    playlist: PlaylistSummary,
+    index: number,
+    at: MenuPoint,
+    move: (to: number) => void,
+  ) => void;
   /** The New playlist form: closed (`null`), or open with the song waiting to go in. */
   creating: { adding: string | null; busy: boolean } | null;
   onStartCreate: () => void;
@@ -74,6 +82,15 @@ const LIBRARY: {
   },
 ];
 
+/** The sidebar button of playlist `id`. */
+function buttonFor(list: HTMLElement | null, id: string): HTMLElement | null {
+  return (
+    [...(list?.querySelectorAll<HTMLElement>('[data-playlist]') ?? [])].find(
+      (button) => button.dataset.playlist === id,
+    ) ?? null
+  );
+}
+
 /**
  * The sidebar's library while signed in: Liked Songs, the saved lists, Recently Played and the
  * queue, then playlists. Playlists can be put in Melora's own order by dragging them, Alt+↑ or
@@ -94,8 +111,48 @@ export function SpotifyPlaylists({
 }: Props) {
   const count = playlists.total + LIBRARY.length;
   const list = useRef<HTMLDivElement>(null);
+  const newButton = useRef<HTMLButtonElement>(null);
   const reorder = useDragReorder(list, onMove);
   const last = playlists.items.length - 1;
+  // A playlist moved from the keyboard keeps focus once it shows in its new place: React moves
+  // the focused button within the list, which can blur it.
+  const follow = useRef<{ id: string; from: number } | null>(null);
+  // Where focus goes once the New playlist form closes: back to "+ New", or to the new
+  // playlist once it's chosen (`selected` moves on from what it was).
+  const afterForm = useRef<
+    { to: 'new' } | { to: 'created'; selected: string | null } | null
+  >(null);
+
+  function move(i: number, to: number): void {
+    const playlist = playlists.items[i];
+    if (!playlist || to < 0 || to > last) return;
+    follow.current = { id: playlist.id, from: i };
+    onMove(i, to);
+  }
+
+  const items = playlists.items;
+  useEffect(() => {
+    const moved = follow.current;
+    if (moved === null) return;
+    const now = items.findIndex((item) => item.id === moved.id);
+    if (now === moved.from) return;
+    follow.current = null;
+    if (now >= 0) buttonFor(list.current, moved.id)?.focus();
+  }, [items]);
+
+  useEffect(() => {
+    const next = afterForm.current;
+    if (creating !== null || next === null) return;
+    if (next.to === 'new') {
+      afterForm.current = null;
+      newButton.current?.focus();
+    } else if (selected !== next.selected) {
+      afterForm.current = null;
+      list.current
+        ?.querySelector<HTMLElement>('.playlist-item[aria-pressed="true"]')
+        ?.focus();
+    }
+  }, [creating, selected]);
 
   return (
     <section className="playlists" aria-label="Your Spotify playlists">
@@ -104,6 +161,7 @@ export function SpotifyPlaylists({
         <span>
           {creating === null && (
             <button
+              ref={newButton}
               className="panel-action"
               aria-label="New playlist"
               onClick={onStartCreate}
@@ -118,8 +176,14 @@ export function SpotifyPlaylists({
         <NewPlaylist
           adding={creating.adding}
           busy={creating.busy}
-          onCreate={onCreate}
-          onCancel={onCancelCreate}
+          onCreate={(name) => {
+            afterForm.current = { to: 'created', selected };
+            onCreate(name);
+          }}
+          onCancel={() => {
+            afterForm.current = { to: 'new' };
+            onCancelCreate();
+          }}
         />
       )}
       <div
@@ -149,6 +213,7 @@ export function SpotifyPlaylists({
           return (
             <button
               key={playlist.id}
+              data-playlist={playlist.id}
               {...reorder.bind(i)}
               className={`playlist-item ${active ? 'selected' : ''} ${reorder.classFor(i)}`}
               aria-pressed={active}
@@ -158,12 +223,11 @@ export function SpotifyPlaylists({
                 const step = moveKey(event);
                 if (step === null) return;
                 event.preventDefault();
-                const to = i + step;
-                if (to >= 0 && to <= last) onMove(i, to);
+                move(i, i + step);
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
-                onMenu(playlist, i, menuPoint(event));
+                onMenu(playlist, i, menuPoint(event), (to) => move(i, to));
               }}
             >
               <span className="playlist-icon">▤</span>

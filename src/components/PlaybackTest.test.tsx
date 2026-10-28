@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlaybackTest } from './PlaybackTest';
 import { describeError } from '../features/account';
-import { diagnosticsLine, formatTime, positionAt } from '../features/playback';
+import { diagnosticsLine, positionAt } from '../features/playback';
+import { trackTime } from '../features/library';
 import {
   activatePlayback,
   allowPlayback,
@@ -179,7 +180,9 @@ describe('playback helpers', () => {
     expect(positionAt(status, 99_000)).toBe(5_000);
     expect(positionAt(status, 9_000)).toBe(1_000);
     expect(positionAt({ ...status, paused: true }, 12_500)).toBe(1_000);
-    expect(formatTime(65_900)).toBe('1:05');
+    expect(trackTime(65_900)).toBe('1:05');
+    // A long episode reads the same in the player as in its list.
+    expect(trackTime(7_530_000)).toBe('2:05:30');
   });
 
   it('lists CSP blocks in the diagnostics', () => {

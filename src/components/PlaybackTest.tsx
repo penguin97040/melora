@@ -10,12 +10,12 @@ import type { PlaybackStatus, SpotifyStatus } from '../native/client';
 import { describeFailure } from '../features/account';
 import {
   diagnosticsLine,
-  formatTime,
   issueLine,
   playbackAllowed,
   tierLine,
 } from '../features/playback';
 import { usePlaybackPosition } from '../features/usePlaybackPosition';
+import { trackTime } from '../features/library';
 
 // Phase 3: switching embedded playback on, under the Spotify account settings. While Melora
 // plays, the song and its controls are in the right-hand player; this block keeps the setup
@@ -142,7 +142,7 @@ export function PlaybackTest({
           {nowPlaying
             ? `${nowPlaying.name}${nowPlaying.artists.length > 0 ? ` — ${nowPlaying.artists.join(', ')}` : ''}${nowPlaying.album ? ` (${nowPlaying.album})` : ''}`
             : 'Nothing is playing.'}{' '}
-          · {formatTime(position)} / {formatTime(playback.durationMs)}
+          · {trackTime(position)} / {trackTime(playback.durationMs)}
         </p>
       )}
       {diagnostics && (

@@ -12,6 +12,8 @@ type Press = {
   y: number;
   pointer: number;
   dragging: boolean;
+  /** Escape ended the drag while the button was down. */
+  cancelled: boolean;
 };
 
 /**
@@ -61,7 +63,8 @@ export function useDragReorder<E extends HTMLElement>(
     const cancel = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      press.current = null;
+      // The button is still held: letting it go mustn't click (open or play) the item.
+      if (press.current) press.current.cancelled = true;
       setDrag(null);
     };
     window.addEventListener('keydown', cancel, true);
@@ -95,11 +98,13 @@ export function useDragReorder<E extends HTMLElement>(
           y: event.clientY,
           pointer: event.pointerId,
           dragging: false,
+          cancelled: false,
         };
       },
       onPointerMove: (event) => {
         const current = press.current;
         if (!current || current.pointer !== event.pointerId) return;
+        if (current.cancelled) return;
         if (!current.dragging) {
           if (Math.abs(event.clientY - current.y) < DRAG_FROM) return;
           current.dragging = true;
@@ -117,6 +122,7 @@ export function useDragReorder<E extends HTMLElement>(
         press.current = null;
         if (!current?.dragging) return;
         swallowClick.current = true;
+        if (current.cancelled) return;
         const over = locate(event.clientY, current.index);
         setDrag(null);
         if (over !== current.index) onMove(current.index, over);

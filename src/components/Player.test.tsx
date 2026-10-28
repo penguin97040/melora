@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useEffect } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { Player } from './Player';
 import { playbackStatus } from '../native/playbackFixture';
@@ -88,6 +89,29 @@ describe('player panel', () => {
         expect(screen.getByRole('button', { name })).toBeDisabled();
       unmount();
     }
+  });
+
+  it('keeps the device picker (and an open list) when playback goes live', () => {
+    let mounts = 0;
+    function Picker() {
+      useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <div data-testid="device-slot" />;
+    }
+    const props = {
+      devicePicker: <Picker />,
+      likeMessage: null,
+      onCommand: vi.fn(),
+      onToggleLike: vi.fn(),
+      onOpenInSpotify: vi.fn(),
+    };
+    const { rerender } = render(
+      <Player {...props} playback={playbackStatus()} />,
+    );
+    rerender(<Player {...props} playback={live()} />);
+    rerender(<Player {...props} playback={playbackStatus()} />);
+    expect(mounts).toBe(1);
   });
 
   it('shows the real item with unaltered artwork and attribution', async () => {

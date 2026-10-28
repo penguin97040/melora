@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -268,6 +269,30 @@ describe('Editing your playlists', () => {
     expect(playFromList).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels a drag on Escape without the release playing anything', async () => {
+    await openSidebar('Mine');
+    const alpha = await screen.findByRole('button', { name: /^Alpha/ });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: HTMLElement) {
+        const i = Number(this.dataset.reorder ?? 0);
+        return { top: i * 40, bottom: i * 40 + 40 } as DOMRect;
+      },
+    );
+    const from = alpha.closest('tr')!;
+    fireEvent.pointerDown(from, { button: 0, pointerId: 1, clientY: 20 });
+    fireEvent.pointerMove(from, { pointerId: 1, clientY: 60 });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(from).not.toHaveClass('dragging');
+    fireEvent.pointerMove(from, { pointerId: 1, clientY: 100 });
+    fireEvent.pointerUp(from, { pointerId: 1, clientY: 100 });
+    fireEvent.click(screen.getByRole('button', { name: /^Bravo/ }));
+    expect(songOrder()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(moveInPlaylist).not.toHaveBeenCalled();
+    expect(playFromList).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /^Charlie/ }));
+    expect(playFromList).toHaveBeenCalledTimes(1);
+  });
+
   it('removes a song from its menu', async () => {
     const user = await openSidebar('Mine');
     await user.pointer({
@@ -293,6 +318,22 @@ describe('Editing your playlists', () => {
     expect(songOrder()).toEqual(['Alpha', 'Charlie']);
     expect(await screen.findByText('Removed from Mine')).toBeInTheDocument();
     expect(screen.getByText('2 tracks')).toBeInTheDocument();
+  });
+
+  it('puts the sidebar count back when a removal fails', async () => {
+    vi.mocked(removeFromPlaylist).mockRejectedValue({ kind: 'network' });
+    const user = await openSidebar('Mine');
+    await user.pointer({
+      keys: '[MouseRight]',
+      target: await screen.findByRole('button', { name: /^Bravo/ }),
+    });
+    await user.click(
+      screen.getByRole('menuitem', { name: 'Remove from this playlist' }),
+    );
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    await waitFor(async () =>
+      expect(await sidebarButton('Mine')).toHaveTextContent('3 tracks'),
+    );
   });
 
   it('puts the list back and says why when Spotify refuses', async () => {
@@ -409,6 +450,37 @@ describe('Editing your playlists', () => {
       screen.queryByRole('form', { name: 'New playlist' }),
     ).not.toBeInTheDocument();
     expect(createPlaylist).not.toHaveBeenCalled();
+    // Focus goes back where the form was opened, not to the page.
+    expect(screen.getByRole('button', { name: 'New playlist' })).toHaveFocus();
+  });
+
+  it('keeps the form while it creates, then focuses the new playlist', async () => {
+    let finish: (made: PlaylistSummary) => void = () => undefined;
+    vi.mocked(createPlaylist).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(
+      await screen.findByRole('button', { name: 'New playlist' }),
+    );
+    await user.type(screen.getByLabelText('Playlist name'), 'Road trip{Enter}');
+    const form = screen.getByRole('form', { name: 'New playlist' });
+    await waitFor(() =>
+      expect(
+        within(form).getByRole('button', { name: 'Cancel' }),
+      ).toBeDisabled(),
+    );
+    await user.keyboard('{Escape}');
+    expect(form).toBeInTheDocument();
+
+    act(() => finish(playlist(9, 'Road trip')));
+    await waitFor(async () =>
+      expect(await sidebarButton('Road trip')).toHaveFocus(),
+    );
   });
 });
 
@@ -436,6 +508,26 @@ describe('Melora’s own playlist order', () => {
     );
     expect(setPlaylistOrder).toHaveBeenLastCalledWith([]);
     expect(sidebarOrder()).toEqual(['Mine', 'Second', 'Theirs']);
+  });
+
+  it('keeps focus on a playlist moved down, by key or from its menu', async () => {
+    // jsdom keeps focus on a moved element, unlike browsers, so this checks the outcome.
+    const user = userEvent.setup();
+    render(<App />);
+    (await sidebarButton('Mine')).focus();
+    await user.keyboard('{Alt>}{ArrowDown}{/Alt}');
+    expect(sidebarOrder()).toEqual(['Second', 'Mine', 'Theirs']);
+    expect(await sidebarButton('Mine')).toHaveFocus();
+
+    await user.pointer({
+      keys: '[MouseRight]',
+      target: await sidebarButton('Mine'),
+    });
+    await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+    expect(sidebarOrder()).toEqual(['Second', 'Theirs', 'Mine']);
+    await waitFor(async () =>
+      expect(await sidebarButton('Mine')).toHaveFocus(),
+    );
   });
 
   it('opens in the saved order, with new playlists after it', async () => {

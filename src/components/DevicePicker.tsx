@@ -55,6 +55,7 @@ export function DevicePicker({
   playback,
   volume,
   onVolume,
+  onVolumeCommit,
   onCommand,
   onOpenSettings,
 }: {
@@ -62,7 +63,10 @@ export function DevicePicker({
   playback: PlaybackStatus | null;
   /** Melora's own volume, 0–100 (the Settings preference). */
   volume: number;
+  /** While the slider moves. */
   onVolume: (volume: number) => void;
+  /** When it's let go: saved and sent, once. */
+  onVolumeCommit: (volume: number) => void;
   onCommand: (command: PlayerCommand) => void;
   onOpenSettings: () => void;
 }) {
@@ -304,6 +308,15 @@ export function DevicePicker({
                     max="100"
                     value={volume}
                     onChange={(event) => onVolume(Number(event.target.value))}
+                    onPointerUp={(event) =>
+                      onVolumeCommit(Number(event.currentTarget.value))
+                    }
+                    onKeyUp={(event) =>
+                      onVolumeCommit(Number(event.currentTarget.value))
+                    }
+                    onBlur={(event) =>
+                      onVolumeCommit(Number(event.currentTarget.value))
+                    }
                   />
                 </label>
               )}
