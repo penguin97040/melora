@@ -81,7 +81,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getWindowChrome).mockResolvedValue('preview');
   vi.mocked(getAppInfo).mockResolvedValue({
-    version: '0.7.1',
+    version: '0.7.2',
     platform: 'windows',
     preferences: { scale: 100, comfortable: false, volume: 70 },
     storageError: null,
@@ -103,7 +103,7 @@ describe('app shell', () => {
     );
     vi.mocked(showMainWindow).mockImplementation(async () => {
       expect(document.documentElement.style.fontSize).toBe('150%');
-      expect(screen.getByText('v0.7.1 / windows')).toBeInTheDocument();
+      expect(screen.getByText('v0.7.2 / windows')).toBeInTheDocument();
       expect(document.querySelector('.app')).toHaveClass('comfortable');
     });
     render(
@@ -114,7 +114,7 @@ describe('app shell', () => {
     expect(showMainWindow).not.toHaveBeenCalled();
     await act(async () =>
       resolveInfo({
-        version: '0.7.1',
+        version: '0.7.2',
         platform: 'windows',
         storageError: null,
         preferences: { scale: 150, comfortable: true, volume: 40 },
@@ -135,7 +135,7 @@ describe('app shell', () => {
       }),
     );
     render(<App />);
-    await screen.findByText('v0.7.1 / windows');
+    await screen.findByText('v0.7.2 / windows');
     expect(showMainWindow).not.toHaveBeenCalled();
     await act(async () => resolveChrome('macos'));
     expect(showMainWindow).toHaveBeenCalledTimes(1);
@@ -187,7 +187,7 @@ describe('app shell', () => {
 
   it('reports native IPC details and keeps every control off until something plays', async () => {
     render(<App />);
-    expect(await screen.findByText('v0.7.1 / windows')).toBeInTheDocument();
+    expect(await screen.findByText('v0.7.2 / windows')).toBeInTheDocument();
     const controls = screen.getByRole('group', { name: 'Player controls' });
     for (const button of within(controls).getAllByRole('button'))
       expect(button).toBeDisabled();
@@ -201,7 +201,7 @@ describe('app shell', () => {
   it('welcomes a new user with Melora’s artwork and no invented music', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText('v0.7.1 / windows');
+    await screen.findByText('v0.7.2 / windows');
     expect(
       screen.getByRole('heading', { name: 'Welcome to Melora' }),
     ).toBeInTheDocument();
@@ -232,7 +232,7 @@ describe('app shell', () => {
       onStatus({ ...signedIn([]), auth: { kind: 'signedOut' } });
     });
     render(<App />);
-    await screen.findByText('v0.7.1 / windows');
+    await screen.findByText('v0.7.2 / windows');
     expect(
       screen.getByText('Sign in to Spotify to see your playlists here.'),
     ).toBeInTheDocument();
@@ -256,14 +256,14 @@ describe('app shell', () => {
   it('restores display settings and reports failed persistence', async () => {
     const user = userEvent.setup();
     vi.mocked(getAppInfo).mockResolvedValue({
-      version: '0.7.1',
+      version: '0.7.2',
       platform: 'windows',
       preferences: { scale: 125, comfortable: true, volume: 40 },
       storageError: null,
     });
     vi.mocked(savePreferences).mockRejectedValue(new Error('fixture failure'));
     render(<App />);
-    await screen.findByText('v0.7.1 / windows');
+    await screen.findByText('v0.7.2 / windows');
     await user.click(screen.getByRole('button', { name: /Settings/ }));
     expect(screen.getByRole('combobox')).toHaveValue('125');
     expect(screen.getByRole('checkbox')).toBeChecked();
@@ -286,7 +286,7 @@ describe('app shell', () => {
         }),
     );
     render(<App />);
-    await screen.findByText('v0.7.1 / windows');
+    await screen.findByText('v0.7.2 / windows');
     await user.click(screen.getByRole('button', { name: /Settings/ }));
     await user.selectOptions(screen.getByRole('combobox'), '125');
     await user.click(screen.getByRole('checkbox'));

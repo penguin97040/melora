@@ -2243,7 +2243,7 @@ dependencies = [
 
 [[package]]
 name = "melora"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "ora-tauri",
  "serde",
