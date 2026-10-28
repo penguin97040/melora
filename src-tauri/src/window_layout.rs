@@ -5,7 +5,8 @@ const MINIMUM: LogicalSize<f64> = LogicalSize::new(720.0, 520.0);
 
 struct OpeningLayout {
     size: PhysicalSize<u32>,
-    minimum: PhysicalSize<u32>,
+    /// Logical, so it stays 720 × 520 on a monitor with another scale.
+    minimum: LogicalSize<f64>,
     position: PhysicalPosition<i32>,
 }
 
@@ -35,9 +36,9 @@ fn opening_layout(
     OpeningLayout {
         size,
         // A minimum larger than the work area would defeat the opening bound.
-        minimum: PhysicalSize::new(
-            ((MINIMUM.width * scale).round() as u32).min(size.width),
-            ((MINIMUM.height * scale).round() as u32).min(size.height),
+        minimum: LogicalSize::new(
+            MINIMUM.width.min(f64::from(size.width) / scale),
+            MINIMUM.height.min(f64::from(size.height) / scale),
         ),
         position: PhysicalPosition::new(
             work_area.position.x
@@ -149,8 +150,9 @@ mod tests {
             let layout = opening_layout(area, scale, decorations);
             assert!(layout.size.width + decorations.width <= area.size.width);
             assert!(layout.size.height + decorations.height <= area.size.height);
-            assert!(layout.minimum.width <= layout.size.width);
-            assert!(layout.minimum.height <= layout.size.height);
+            let minimum = layout.minimum.to_physical::<f64>(scale);
+            assert!(minimum.width <= f64::from(layout.size.width) + 1e-9);
+            assert!(minimum.height <= f64::from(layout.size.height) + 1e-9);
             assert!(layout.position.x >= area.position.x);
             assert!(layout.position.y >= area.position.y);
         }
@@ -167,7 +169,25 @@ mod tests {
             PhysicalSize::new(32, 78),
         );
         assert_eq!(layout.size, PhysicalSize::new(2880, 1880));
-        assert_eq!(layout.minimum, PhysicalSize::new(1440, 1040));
+        // Logical: Windows and Tauri apply each monitor's own scale to it, so it doesn't
+        // become 1440 × 1040 logical px on a 100% monitor the window moves to.
+        assert_eq!(layout.minimum, MINIMUM);
+    }
+
+    #[test]
+    fn a_small_display_lowers_the_minimum_in_logical_pixels() {
+        let layout = opening_layout(
+            tauri::PhysicalRect {
+                position: PhysicalPosition::new(0, 0),
+                size: PhysicalSize::new(1000, 700),
+            },
+            1.5,
+            PhysicalSize::new(0, 0),
+        );
+        assert_eq!(layout.size, PhysicalSize::new(1000, 700));
+        // 1000 × 700 physical px at 150% is about 667 × 467 logical px.
+        assert!((layout.minimum.width - 1000.0 / 1.5).abs() < 1e-9);
+        assert!((layout.minimum.height - 700.0 / 1.5).abs() < 1e-9);
     }
 
     #[test]

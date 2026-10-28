@@ -4,8 +4,12 @@ mod window_layout;
 
 use preferences::{Preferences, Store};
 use serde::Serialize;
-use std::sync::Mutex;
+use std::{sync::Mutex, time::Duration};
 use tauri::Manager;
+
+/// How long the frontend has to ask for the window before it's shown anyway. Far longer than
+/// a normal start, so the shell is ready and styled when it shows.
+const REVEAL_FALLBACK: Duration = Duration::from_secs(15);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,14 +64,27 @@ fn show_main_window(
     if window.label() != "main" {
         return Err("Only the main application window can be shown.".into());
     }
+    reveal(&window, &startup)
+}
+
+/// Shows the main window once, with its opening geometry. The frontend asks once its first
+/// screen is ready; `run` falls back to this if it never does.
+fn reveal(
+    window: &tauri::WebviewWindow,
+    startup: &Mutex<window_layout::StartupWindow>,
+) -> Result<(), String> {
     startup
         .lock()
         .map_err(|_| "The application window is temporarily unavailable.")?
         .reveal(|| {
             // Complete all opening geometry while hidden. No resize handler may
-            // re-centre the window after show, including queued startup events.
-            window_layout::fit_opening_window(&window)
-                .and_then(|()| window.show())
+            // re-centre the window after show, including queued startup events. A window
+            // without its opening geometry still beats one that never shows.
+            if window_layout::fit_opening_window(window).is_err() {
+                eprintln!("Melora could not size the application window.");
+            }
+            window
+                .show()
                 .map_err(|_| "The application window could not be shown.".to_string())?;
             // A window created hidden must also receive native keyboard focus.
             // Failure to activate an already visible window must not repeat geometry.
@@ -136,6 +153,16 @@ pub fn run() {
             let window = builder.build()?;
             window_layout::fit_opening_window(&window)?;
             ora_tauri::media_controls(&window);
+            // If the frontend never asks to be shown (a script failed to load, say), the
+            // window still appears, rather than Melora running with nothing on screen.
+            let fallback = window.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(REVEAL_FALLBACK);
+                let startup = fallback.state::<Mutex<window_layout::StartupWindow>>();
+                if reveal(&fallback, &startup).is_err() {
+                    eprintln!("Melora could not show the application window.");
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
