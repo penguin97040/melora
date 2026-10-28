@@ -37,7 +37,7 @@ export function describeError(
     case 'rateLimited':
       return 'Spotify is limiting requests. Try again in a moment.';
     case 'quotaExceeded':
-      return 'Spotify API quota reached — try again later.';
+      return 'Spotify API quota reached. Try again later.';
     case 'offline':
       return 'Spotify can’t be reached. Check your internet connection.';
     case 'network':

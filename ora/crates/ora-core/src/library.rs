@@ -1,4 +1,4 @@
-//! The account's library — playlists, Liked Songs, saved albums, shows and episodes — and the
+//! The account's library (playlists, Liked Songs, saved albums, shows and episodes) and the
 //! albums and shows opened from it, read through the Web API and cached briefly.
 //!
 //! Rules:

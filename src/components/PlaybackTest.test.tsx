@@ -126,7 +126,7 @@ describe('Playback in Melora (test)', () => {
         volume={70}
       />,
     );
-    expect(screen.getByText(/Song — Artist \(Album\)/)).toHaveTextContent(
+    expect(screen.getByText(/Song · Artist \(Album\)/)).toHaveTextContent(
       '0:20 / 3:00',
     );
     expect(

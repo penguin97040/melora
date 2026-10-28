@@ -140,7 +140,7 @@ export function PlaybackTest({
       {tier === 'active' && (
         <p className="account-state">
           {nowPlaying
-            ? `${nowPlaying.name}${nowPlaying.artists.length > 0 ? ` — ${nowPlaying.artists.join(', ')}` : ''}${nowPlaying.album ? ` (${nowPlaying.album})` : ''}`
+            ? `${nowPlaying.name}${nowPlaying.artists.length > 0 ? ` · ${nowPlaying.artists.join(', ')}` : ''}${nowPlaying.album ? ` (${nowPlaying.album})` : ''}`
             : 'Nothing is playing.'}{' '}
           · {trackTime(position)} / {trackTime(playback.durationMs)}
         </p>
