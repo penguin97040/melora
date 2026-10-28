@@ -30,7 +30,27 @@ pub fn transport_error(error: TransportError) -> OraError {
     match error {
         TransportError::Offline => OraError::Offline,
         TransportError::Network => OraError::Network,
+        TransportError::TooLarge => OraError::ResponseTooLarge,
     }
+}
+
+/// One Web API request with the access token; callers check the status.
+async fn send<H: HttpClient>(
+    http: &H,
+    access: &Secret,
+    method: Method,
+    url: String,
+    json: Option<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    http.send(Request {
+        method,
+        url,
+        bearer: Some(access.clone()),
+        form: Vec::new(),
+        json,
+    })
+    .await
+    .map_err(|e| ApiError::Other(transport_error(e)))
 }
 
 #[derive(Deserialize)]
@@ -91,16 +111,7 @@ struct ExternalUrls {
 
 /// `GET /me`, reduced to the fields that still exist after Spotify's 2026 changes.
 pub async fn me<H: HttpClient>(http: &H, access: &Secret) -> Result<Profile, ApiError> {
-    let response = http
-        .send(Request {
-            method: Method::Get,
-            url: format!("{API_BASE}/me"),
-            bearer: Some(access.clone()),
-            form: Vec::new(),
-            json: None,
-        })
-        .await
-        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    let response = send(http, access, Method::Get, format!("{API_BASE}/me"), None).await?;
     if response.status != 200 {
         // Straight after sign-in, a 403 here almost always means the allowlist.
         return Err(error_for(&response, ForbiddenHint::Allowlist));
@@ -153,16 +164,7 @@ async fn player_send<H: HttpClient>(
     url: String,
     body: Option<serde_json::Value>,
 ) -> Result<(), ApiError> {
-    let response = http
-        .send(Request {
-            method,
-            url,
-            bearer: Some(access.clone()),
-            form: Vec::new(),
-            json: body,
-        })
-        .await
-        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    let response = send(http, access, method, url, body).await?;
     if matches!(response.status, 200 | 202 | 204) {
         Ok(())
     } else {
@@ -310,16 +312,7 @@ async fn library_send<H: HttpClient>(
     method: Method,
     url: String,
 ) -> Result<Response, ApiError> {
-    let response = http
-        .send(Request {
-            method,
-            url,
-            bearer: Some(access.clone()),
-            form: Vec::new(),
-            json: None,
-        })
-        .await
-        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    let response = send(http, access, method, url, None).await?;
     if matches!(response.status, 200 | 201 | 204) {
         Ok(response)
     } else {
@@ -333,17 +326,8 @@ pub async fn library_contains<H: HttpClient>(
     access: &Secret,
     item: &SpotifyUri,
 ) -> Result<bool, ApiError> {
-    let url = format!(
-        "{API_BASE}/me/library/contains?uris={}",
-        encode(&item.uri())
-    );
-    let response = library_send(http, access, Method::Get, url).await?;
-    let saved: Vec<bool> =
-        serde_json::from_slice(&response.body).map_err(|_| ApiError::Other(OraError::Network))?;
-    match saved.as_slice() {
-        [saved] => Ok(*saved),
-        _ => Err(ApiError::Other(OraError::Network)),
-    }
+    let saved = library_contains_many(http, access, std::slice::from_ref(item)).await?;
+    Ok(saved[0])
 }
 
 /// `PUT /me/library?uris=…` to save one item, `DELETE` to remove it (no body).
@@ -353,9 +337,7 @@ pub async fn library_set<H: HttpClient>(
     item: &SpotifyUri,
     saved: bool,
 ) -> Result<(), ApiError> {
-    let url = format!("{API_BASE}/me/library?uris={}", encode(&item.uri()));
-    let method = if saved { Method::Put } else { Method::Delete };
-    library_send(http, access, method, url).await.map(drop)
+    library_set_many(http, access, std::slice::from_ref(item), saved).await
 }
 
 /// A Spotify Connect device as the Web API reports it. The ID never leaves `ora-core`.
@@ -533,16 +515,7 @@ async fn player_get<H: HttpClient>(
     access: &Secret,
     url: String,
 ) -> Result<Response, ApiError> {
-    let response = http
-        .send(Request {
-            method: Method::Get,
-            url,
-            bearer: Some(access.clone()),
-            form: Vec::new(),
-            json: None,
-        })
-        .await
-        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    let response = send(http, access, Method::Get, url, None).await?;
     if matches!(response.status, 200 | 204) {
         Ok(response)
     } else {
@@ -645,6 +618,11 @@ pub enum PlayStart {
 
 /// Page sizes: Spotify's maximum for these lists.
 pub const PAGE: u32 = 50;
+/// Saved albums carry every track of every album (each with its markets), so 50 of them can
+/// pass several megabytes.
+pub const ALBUM_PAGE: u32 = 20;
+/// Spotify's largest documented offset for the library's lists; no page points past it.
+pub const MAX_OFFSET: u32 = 100_000;
 
 async fn get_json<H: HttpClient, T: serde::de::DeserializeOwned>(
     http: &H,
@@ -652,16 +630,7 @@ async fn get_json<H: HttpClient, T: serde::de::DeserializeOwned>(
     url: String,
     forbidden: ForbiddenHint,
 ) -> Result<T, ApiError> {
-    let response = http
-        .send(Request {
-            method: Method::Get,
-            url,
-            bearer: Some(access.clone()),
-            form: Vec::new(),
-            json: None,
-        })
-        .await
-        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    let response = send(http, access, Method::Get, url, None).await?;
     if response.status != 200 {
         return Err(error_for(&response, forbidden));
     }
@@ -683,7 +652,7 @@ impl<T> PageBody<T> {
         let read = u32::try_from(self.items.len()).unwrap_or(u32::MAX);
         (self.next.is_some() && read > 0)
             .then(|| offset.saturating_add(read))
-            .filter(|next| *next < self.total)
+            .filter(|next| *next < self.total && *next <= MAX_OFFSET)
     }
 }
 
@@ -781,16 +750,7 @@ async fn playlist_send<H: HttpClient>(
     body: serde_json::Value,
     forbidden: ForbiddenHint,
 ) -> Result<Response, ApiError> {
-    let response = http
-        .send(Request {
-            method,
-            url,
-            bearer: Some(access.clone()),
-            form: Vec::new(),
-            json: Some(body),
-        })
-        .await
-        .map_err(|e| ApiError::Other(transport_error(e)))?;
+    let response = send(http, access, method, url, Some(body)).await?;
     if matches!(response.status, 200 | 201) {
         Ok(response)
     } else {
@@ -981,14 +941,12 @@ fn track_row(item: ItemBody, position: u32, local: bool) -> TrackRow {
         position,
         uri: link.as_ref().map(SpotifyUri::uri),
         name: clip(&item.name.unwrap_or_default(), MAX_TEXT),
-        artists: item
-            .artists
-            .into_iter()
-            .filter_map(|artist| artist.name)
-            .take(MAX_ARTISTS)
-            .map(|artist| clip(&artist, MAX_TEXT))
-            .filter(|artist| !artist.is_empty())
-            .collect(),
+        artists: names(
+            item.artists
+                .into_iter()
+                .filter_map(|artist| artist.name)
+                .collect(),
+        ),
         album: clip(&album, MAX_TEXT),
         release_date: item
             .release_date
@@ -1059,13 +1017,13 @@ struct SavedBody {
     show: Option<ResultBody>,
 }
 
-/// `GET /me/albums?limit=50&offset=…`: saved albums, newest first.
+/// `GET /me/albums?limit=20&offset=…`: saved albums, newest first.
 pub async fn saved_albums<H: HttpClient>(
     http: &H,
     access: &Secret,
     offset: u32,
 ) -> Result<CatalogPage, ApiError> {
-    let url = format!("{API_BASE}/me/albums?limit={PAGE}&offset={offset}");
+    let url = format!("{API_BASE}/me/albums?limit={ALBUM_PAGE}&offset={offset}");
     let body: PageBody<SavedBody> = get_json(http, access, url, ForbiddenHint::Unknown).await?;
     Ok(saved_page(SearchKind::Album, body, offset))
 }
@@ -1151,19 +1109,12 @@ struct QueueBody {
 }
 
 /// `GET /me/player/queue`: what plays now and next. With nothing playing, Spotify may answer
-/// 204 or send no current item; both are an empty queue.
+/// 204 (or an empty 200) or send no current item; all are an empty queue.
 pub async fn queue<H: HttpClient>(http: &H, access: &Secret) -> Result<QueueView, ApiError> {
-    let response = http
-        .send(Request {
-            method: Method::Get,
-            url: format!("{API_BASE}/me/player/queue"),
-            bearer: Some(access.clone()),
-            form: Vec::new(),
-            json: None,
-        })
-        .await
-        .map_err(|e| ApiError::Other(transport_error(e)))?;
-    if response.status == 204 {
+    let url = format!("{API_BASE}/me/player/queue");
+    let response = send(http, access, Method::Get, url, None).await?;
+    // `devices` and `player_state` take an empty 200 the same way.
+    if response.status == 204 || (response.status == 200 && response.body.is_empty()) {
         return Ok(QueueView {
             current: None,
             next: Vec::new(),
@@ -1638,6 +1589,40 @@ mod tests {
         assert!(seen
             .iter()
             .all(|r| r.had_bearer && r.json.is_none() && r.form.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn an_empty_queue_reply_is_an_empty_queue() {
+        let http = MockHttp::default();
+        http.push(204, "");
+        http.push(200, "");
+        for _ in 0..2 {
+            let view = queue(&http, &Secret::new("a")).await.unwrap();
+            assert_eq!((view.current, view.next.len()), (None, 0));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_reply_is_reported_as_such() {
+        let http = MockHttp::default();
+        http.push_reply(Err(TransportError::TooLarge));
+        assert!(matches!(
+            saved_albums(&http, &Secret::new("a"), 0).await,
+            Err(ApiError::Other(OraError::ResponseTooLarge))
+        ));
+    }
+
+    #[test]
+    fn no_page_points_past_the_largest_offset() {
+        let page = |items: usize, total: u32| PageBody::<u8> {
+            items: vec![Some(0); items],
+            total,
+            next: Some(String::new()),
+        };
+        assert_eq!(page(50, 200_000).next_offset(99_950), Some(MAX_OFFSET));
+        assert_eq!(page(50, 200_000).next_offset(MAX_OFFSET), None);
+        assert_eq!(page(50, 120).next_offset(50), Some(100));
+        assert_eq!(page(20, 120).next_offset(100), None);
     }
 
     #[tokio::test]

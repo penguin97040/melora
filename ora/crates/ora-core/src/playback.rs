@@ -527,7 +527,11 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         if item.kind != Kind::Track {
             return Ok(());
         }
+        let mark = self.library().write_mark();
         let liked = self.library_contains(&item).await?;
+        let liked = self
+            .library()
+            .remember_answer(&self.cache_scope(), &item, liked, mark);
         self.playback().set_liked(&item, liked);
         Ok(())
     }

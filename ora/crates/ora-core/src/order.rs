@@ -80,14 +80,16 @@ impl OrderStore {
     }
 }
 
-/// Valid playlist IDs, each once, at most `MAX_PLAYLISTS`.
+/// Valid playlist IDs, each once, at most `MAX_PLAYLISTS` (the first ones, which the user
+/// placed; the rest follow Spotify's order).
 fn clean(ids: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     let mut kept: Vec<String> = Vec::with_capacity(ids.len().min(MAX_PLAYLISTS));
     for id in ids {
         if kept.len() == MAX_PLAYLISTS {
             break;
         }
-        if is_base62_id(&id) && !kept.contains(&id) {
+        if is_base62_id(&id) && seen.insert(id.clone()) {
             kept.push(id);
         }
     }
@@ -105,11 +107,10 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
     }
 
     /// Saves Melora's order for the account's playlists; an empty list goes back to Spotify's.
+    /// A longer list than the file keeps is cut, not refused: the UI's list only grows, and
+    /// refusing it would stop every later reorder.
     pub fn set_playlist_order(&self, ids: &[String]) -> Result<(), OraError> {
         self.require(Feature::Playlists)?;
-        if ids.len() > MAX_PLAYLISTS {
-            return Err(OraError::Unsupported);
-        }
         let account = self.account().ok_or(OraError::Unsupported)?;
         self.order_store().save(&account, ids)
     }

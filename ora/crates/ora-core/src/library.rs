@@ -39,8 +39,6 @@ const ALBUM_TTL: Duration = Duration::from_secs(30 * 60);
 const SAVED_TTL: Duration = Duration::from_secs(60);
 const QUEUE_TTL: Duration = Duration::from_secs(2);
 const RECENT_TTL: Duration = Duration::from_secs(30);
-/// Spotify's largest documented offset for these lists.
-const MAX_OFFSET: u32 = 100_000;
 /// One request from the UI covers at most this many items; Melora splits it into batches.
 pub const MAX_ITEMS: usize = 500;
 /// More remembered states than this and the memory starts again.
@@ -50,6 +48,26 @@ const MAX_STATES: usize = 5_000;
 struct SavedStates {
     scope: String,
     states: HashMap<String, (bool, Instant)>,
+    /// Counts saves, removals and forgets. A `contains` answer for an item written after its
+    /// request started is out of date and dropped.
+    writes: u64,
+    written: HashMap<String, u64>,
+}
+
+impl SavedStates {
+    /// Starts again for another scope, or when full.
+    fn enter(&mut self, scope: &str) {
+        if self.scope != scope || self.states.len() >= MAX_STATES {
+            self.scope = scope.to_owned();
+            self.states.clear();
+            self.written.clear();
+        }
+    }
+
+    fn mark_written(&mut self, uri: String) {
+        self.writes += 1;
+        self.written.insert(uri, self.writes);
+    }
 }
 
 pub struct Library {
@@ -120,13 +138,45 @@ impl Library {
             .map(|(saved, _)| *saved)
     }
 
+    /// After this app saved or removed `item`.
     pub(crate) fn remember_saved(&self, scope: &str, item: &SpotifyUri, saved: bool) {
         let mut states = self.states();
-        if states.scope != scope || states.states.len() >= MAX_STATES {
-            states.scope = scope.to_owned();
-            states.states.clear();
-        }
+        states.enter(scope);
+        states.mark_written(item.uri());
         states.states.insert(item.uri(), (saved, Instant::now()));
+    }
+
+    /// Where the writes stand before a `contains` request, for `remember_answer`.
+    pub(crate) fn write_mark(&self) -> u64 {
+        self.states().writes
+    }
+
+    /// Spotify's `contains` answer for `item`, asked at `mark`. Returns what to show: the
+    /// answer, or the newer state if `item` was saved, removed or forgotten meanwhile.
+    pub(crate) fn remember_answer(
+        &self,
+        scope: &str,
+        item: &SpotifyUri,
+        saved: bool,
+        mark: u64,
+    ) -> bool {
+        let mut states = self.states();
+        states.enter(scope);
+        let uri = item.uri();
+        if states.written.get(&uri).is_some_and(|at| *at > mark) {
+            return states.states.get(&uri).map_or(saved, |(newer, _)| *newer);
+        }
+        states.states.insert(uri, (saved, Instant::now()));
+        saved
+    }
+
+    /// After a failed save or removal, when nobody knows which way it went: ask Spotify again.
+    fn forget_saved(&self, items: &[SpotifyUri]) {
+        let mut states = self.states();
+        for item in items {
+            states.states.remove(&item.uri());
+            states.mark_written(item.uri());
+        }
     }
 
     /// After items of these kinds were saved or removed.
@@ -146,7 +196,7 @@ impl Library {
 /// Offsets come from a previous page (a short page can end anywhere); anything past Spotify's
 /// limit is refused before a request.
 fn page_offset(offset: u32) -> Result<u32, OraError> {
-    if offset <= MAX_OFFSET {
+    if offset <= api::MAX_OFFSET {
         Ok(offset)
     } else {
         Err(OraError::Unsupported)
@@ -458,13 +508,14 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
         }
         let http = self.http();
         for batch in missing.chunks(api::LIBRARY_BATCH) {
+            let mark = library.write_mark();
             let saved = self
                 .authorised(|access| async move {
                     api::library_contains_many(http, &access, batch).await
                 })
                 .await?;
             for (item, saved) in batch.iter().zip(saved) {
-                library.remember_saved(&scope, item, saved);
+                let saved = library.remember_answer(&scope, item, saved, mark);
                 self.playback().set_liked(item, saved);
                 answers.insert(item.uri(), saved);
             }
@@ -492,6 +543,9 @@ impl<H: HttpClient, S: CredentialStore, B: Browser> Ora<H, S, B> {
             // Batches already sent changed the library even if a later one fails.
             self.library()
                 .forget_lists(batch.iter().map(|item| item.kind));
+            if result.is_err() {
+                self.library().forget_saved(batch);
+            }
             result?;
             for item in batch {
                 self.library().remember_saved(&scope, item, saved);

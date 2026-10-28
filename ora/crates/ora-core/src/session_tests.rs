@@ -1916,7 +1916,7 @@ async fn saved_albums_shows_and_episodes_are_listed() {
     assert_eq!(
         urls,
         [
-            "https://api.spotify.com/v1/me/albums?limit=50&offset=0",
+            "https://api.spotify.com/v1/me/albums?limit=20&offset=0",
             "https://api.spotify.com/v1/me/shows?limit=50&offset=0",
             "https://api.spotify.com/v1/me/episodes?limit=50&offset=0",
         ]
@@ -2501,6 +2501,18 @@ async fn melora_keeps_its_own_playlist_order_per_account_without_spotify() {
     assert_eq!(h.http.requests().len(), before);
 }
 
+#[tokio::test]
+async fn an_order_longer_than_the_file_keeps_is_cut_not_refused() {
+    let h = library_ready("order-long").await;
+    let id = |i: usize| format!("{i:0>22}");
+    let mut order: Vec<String> = (0..crate::order::MAX_PLAYLISTS + 5).map(id).collect();
+    order.insert(1, id(0));
+    h.ora.set_playlist_order(&order).unwrap();
+    let saved = h.ora.playlist_order().unwrap();
+    assert_eq!(saved.len(), crate::order::MAX_PLAYLISTS);
+    assert_eq!(saved[..2], [id(0), id(1)]);
+}
+
 /// Signed in from a saved session (`acc1`, `ref1`, profile `ME`).
 async fn restored(label: &str) -> Harness {
     let h = harness(label, User::Ignore);
@@ -2747,4 +2759,47 @@ async fn every_way_a_sign_in_ends_stops_playback() {
         Some(OraError::SessionExpired)
     );
     assert_eq!(h.ora.playback().device_id(), None);
+}
+
+#[tokio::test]
+async fn a_saved_answer_from_before_a_save_never_undoes_it() {
+    let h = whole_library_ready("saved-order").await;
+    let uris = vec![track_uri(1)];
+    // A slow `contains` (not saved) is on its way when the user saves the track.
+    h.http.set_delay(Some(Duration::from_millis(100)));
+    let before = h.http.requests().len();
+    let ora = Arc::clone(&h.ora);
+    let asking = {
+        let uris = uris.clone();
+        tokio::spawn(async move { ora.saved_states(&uris).await })
+    };
+    while h.http.requests().len() == before {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    // Replies go out in the order requests finish: the save first.
+    h.http.set_delay(None);
+    h.http.push(200, "");
+    h.http.push(200, "[false]");
+    h.ora.set_saved(&uris, true).await.unwrap();
+
+    assert_eq!(asking.await.unwrap().unwrap(), [true]);
+    let requests = h.http.requests().len();
+    assert_eq!(h.ora.saved_states(&uris).await.unwrap(), [true]);
+    assert_eq!(h.http.requests().len(), requests);
+}
+
+#[tokio::test]
+async fn a_failed_save_asks_spotify_again_instead_of_trusting_old_states() {
+    let h = whole_library_ready("saved-failed").await;
+    let uris = vec![track_uri(1)];
+    h.http.push(200, "[false]");
+    assert_eq!(h.ora.saved_states(&uris).await.unwrap(), [false]);
+
+    h.http.push(500, "");
+    assert!(h.ora.set_saved(&uris, true).await.is_err());
+    // Nobody knows which way it went, so the next read asks.
+    h.http.push(200, "[true]");
+    let requests = h.http.requests().len();
+    assert_eq!(h.ora.saved_states(&uris).await.unwrap(), [true]);
+    assert_eq!(h.http.requests().len(), requests + 1);
 }

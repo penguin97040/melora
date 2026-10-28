@@ -42,6 +42,8 @@ export function describeError(
       return 'Spotify can’t be reached. Check your internet connection.';
     case 'network':
       return 'Spotify didn’t respond as expected. Try again.';
+    case 'responseTooLarge':
+      return 'Spotify sent more than Melora can read at once, so this part of the list can’t be shown.';
     case 'storageUnavailable':
       return 'This device’s credential store isn’t available, so Melora can’t keep you signed in after it closes, or couldn’t remove the saved sign-in.';
     case 'notConfigured':

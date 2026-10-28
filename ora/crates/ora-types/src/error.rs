@@ -62,6 +62,8 @@ pub enum OraError {
     DeviceUnavailable,
     Offline,
     Network,
+    /// Spotify's reply was larger than Melora reads in one go.
+    ResponseTooLarge,
     Cancelled,
     /// The OS credential store could not be used.
     StorageUnavailable,

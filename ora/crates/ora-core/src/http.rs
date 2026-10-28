@@ -4,7 +4,9 @@
 use crate::secret::Secret;
 use std::{fmt, future::Future, time::Duration};
 
-const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+/// Larger replies are refused. The biggest real ones (a page of saved albums, each with its
+/// tracks) stay well below it.
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
@@ -56,6 +58,17 @@ pub enum TransportError {
     Offline,
     /// The connection failed part-way, timed out or returned an unreadable reply.
     Network,
+    /// The reply was larger than `MAX_RESPONSE_BYTES`.
+    TooLarge,
+}
+
+/// Adds a chunk of the reply, unless that would pass `MAX_RESPONSE_BYTES`.
+fn append_capped(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), TransportError> {
+    if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+        return Err(TransportError::TooLarge);
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 pub trait HttpClient: Send + Sync + 'static {
@@ -126,16 +139,32 @@ impl HttpClient for ReqwestClient {
             .await
             .map_err(|_| TransportError::Network)?
         {
-            if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
-                return Err(TransportError::Network);
-            }
-            body.extend_from_slice(&chunk);
+            append_capped(&mut body, &chunk)?;
         }
         Ok(Response {
             status,
             retry_after_s,
             body,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_past_the_cap_is_refused_as_too_large() {
+        let mut body = Vec::new();
+        let chunk = vec![0u8; MAX_RESPONSE_BYTES / 2];
+        assert_eq!(append_capped(&mut body, &chunk), Ok(()));
+        assert_eq!(append_capped(&mut body, &chunk), Ok(()));
+        assert_eq!(body.len(), MAX_RESPONSE_BYTES);
+        assert_eq!(
+            append_capped(&mut body, &[0]),
+            Err(TransportError::TooLarge)
+        );
+        assert_eq!(body.len(), MAX_RESPONSE_BYTES);
     }
 }
 
