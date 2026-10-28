@@ -1,66 +1,146 @@
 # Melora
 
-Melora is a personal desktop music client built with Tauri 2, Rust, React and TypeScript. Windows and Linux are its targets; macOS is on hold (see [Platforms](#platforms)).
+Melora is a desktop music client for Spotify, for Windows and Linux. It shows your playlists, library, podcasts and search in one window, plays Spotify inside the app on Windows, and controls Spotify on your other devices.
 
-Until you sign in, Melora welcomes you with its own artwork and a way to set up Spotify; nothing in it is invented music. Sign in to Spotify in Settings to see your account and your own music. With Spotify Premium you can also play Spotify inside Melora (Settings → Playback in Melora, through Spotify's Web Playback SDK); while it plays, the player shows the real track, artwork and controls. The player can also show and control what's playing on your other Spotify devices (a phone, the Spotify app, a speaker), and **Choose device** moves the music between them and Melora. The **+** beside the track title adds it to your Liked Songs or removes it. While a podcast plays, the buttons beside Play skip back or forward 15 seconds. Your keyboard's media keys (play/pause, next, previous) and the system's media controls (Windows' media overlay, or the Linux desktop's through MPRIS) control whatever the player shows, in Melora or on another device; in a podcast, next and previous skip 15 seconds there too. Once you allow it, the sidebar lists your Spotify playlists and Liked Songs: choose one to see its tracks, and select a title to play it (Spotify only shows the tracks of playlists you own or collaborate on). The sidebar also lists your saved **Albums**, **Podcasts** and **Your Episodes**: open an album or podcast to see its tracks or episodes, and save or remove it with the **+** beside its name. Every song row has a **+** for Liked Songs too. Signed in, **Search** finds songs, artists, albums, playlists, podcasts and episodes on Spotify as you type; select one to play it (a podcast opens), or **See all** for more of one kind. Long lists stay quick: only the rows on screen are drawn. **Home** shows what's playing, what you played recently, your playlists, saved albums and podcasts, and your devices. The sidebar's **Recently Played** lists your last 50 tracks, and **Queue** shows what plays next; Spotify doesn't let other apps reorder the queue. Right-click a song or episode (or press the Menu key or Shift+F10) to add it to the queue or to one of your playlists. **+ New** in the sidebar creates a private playlist. In a playlist you own or collaborate on, drag a song (or press Alt+↑ or Alt+↓) to move it, or remove it from its menu; the change is made on Spotify too. You can also put the sidebar's playlists in your own order by dragging them or with Alt+↑ and Alt+↓; Melora keeps that order on this device and leaves Spotify's order as it is (**Use Spotify’s order** goes back). Melora is unofficial and is not affiliated with, endorsed by or sponsored by Spotify.
+Melora is unofficial. It is not affiliated with, endorsed by or sponsored by Spotify.
+
+![Melora's Home view: what's playing, recently played tracks and your playlists, with the player on the right](docs/screenshots/home.png)
 
 ## Screenshots
 
-![Melora signed out: the welcome with Melora's own artwork, and the idle player](docs/screenshots/welcome.png)
+The screenshots use made-up music, artwork and a demo account, so they contain nobody's real data.
 
-![Settings, where you add your own Spotify Client ID and sign in](docs/screenshots/settings.png)
+|                                                                                              |                                                                                         |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| ![A playlist open, with its tracks and the + for Liked Songs](docs/screenshots/playlist.png) | ![Search results for an artist: songs, then artists](docs/screenshots/search.png)       |
+| A playlist and its tracks                                                                    | Search                                                                                  |
+| ![A podcast's episodes with their release dates and lengths](docs/screenshots/podcast.png)   | ![The device list open over Home, with the volume slider](docs/screenshots/devices.png) |
+| A podcast's episodes                                                                         | Choosing a device                                                                       |
 
-Both show Melora on Linux before signing in, so they contain no account data. Signed in, your playlists, library, search results and the music playing on your devices fill the same layout.
+Before you sign in, Melora shows its welcome and points you to Settings:
 
-## Run in a browser
+|                                                                       |                                                                                    |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| ![The welcome screen before signing in](docs/screenshots/welcome.png) | ![Settings, where you paste your Spotify Client ID](docs/screenshots/settings.png) |
+| Welcome                                                               | Settings                                                                           |
 
-Use Node 22.22.1 or later:
+## What you need
+
+- 64-bit Windows with the Microsoft Edge WebView2 Runtime, which current Windows versions already have. Or Linux: Fedora, Ubuntu 22.04 or later, Debian 12 or later, or another x86_64 distribution through the AppImage.
+- A Spotify account. Playing music inside Melora needs Spotify Premium.
+- A free Spotify developer app of your own, which takes a few minutes to set up (see below). Melora has no shared app or server.
+
+## Install
+
+Melora is built from source; see [DEVELOPMENT.md](DEVELOPMENT.md) for the build commands.
+
+**Windows.** The build makes a portable ZIP, `Melora-<version>-windows-x64.zip`. Extract the whole ZIP to a folder you can write to, such as one in your Documents, and run `Melora.exe`. There is no installer, and the builds are unsigned.
+
+**Linux.** The build makes these packages:
+
+| Package                                           | For                                                | Install                                            |
+| ------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
+| `Melora-<version>-1.x86_64.rpm` or `.aarch64.rpm` | Fedora (Asahi Remix on Apple silicon uses aarch64) | `sudo dnf install ./Melora-<version>-1.x86_64.rpm` |
+| `Melora_<version>_amd64.deb` or `_arm64.deb`      | Ubuntu 22.04 or later, Debian 12 or later          | `sudo apt install ./Melora_<version>_amd64.deb`    |
+| `Melora_<version>_amd64.AppImage`                 | other x86_64 distributions                         | `chmod +x` it, then run it                         |
+
+The packages add Melora to your app menu and use the system's WebKitGTK. The AppImage carries its own copy, so use a package where there is one. Melora keeps your Spotify sign-in in the desktop's keyring (GNOME Keyring or KWallet), which must be running. To uninstall, run `sudo dnf remove melora` or `sudo apt remove melora`.
+
+## Set up Spotify (once)
+
+Spotify only lets apps sign in through a developer app that someone has registered. Melora uses yours, so it never needs a password, a Client Secret or a server.
+
+1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard), sign in and choose **Create app**. Give it any name and description.
+2. Under **Redirect URIs**, add exactly `http://127.0.0.1:43821/callback` and save. It starts with `http`, not `https`, and includes the port. The Dashboard may show a "not secure" notice for it, which is expected for this local address.
+3. Tick **Web API** and **Web Playback SDK** for the APIs the app uses.
+4. Open the app's **User Management** and add every Spotify account that will use Melora, including your own. Spotify refuses accounts that aren't listed.
+5. Copy the app's **Client ID**.
+6. In Melora, open **Settings**, paste the Client ID under **Spotify account**, choose **Save**, then **Sign in with Spotify**. Your browser opens Spotify's approval page. Approve it and go back to Melora.
+
+The first time you use a feature, such as your playlists, the player or Liked Songs, Melora asks Spotify for that one permission. Your browser opens again to approve it, and Melora keeps working in the meantime. **Cancel sign-in** in Settings stops waiting.
+
+Spotify's Development Mode applies to these apps. The developer app's owner needs Spotify Premium, at most five accounts can use it, and a sign-in lasts up to six months before you sign in again.
+
+## Using Melora
+
+The window has three columns. On the left are the main sections (Home, Library, Search and Settings) and the sidebar with your library and playlists. The middle shows what you choose. On the right is the player.
+
+### Play music
+
+- **Select a title** in any list to play it. A podcast in a list opens to show its episodes.
+- **In Melora (Windows, Premium).** Once you allow playback, Melora becomes a Spotify device each time it opens, so it appears in your device lists. Settings, under **Playback in Melora**, shows whether it's ready and why not.
+- **On another device.** Start Spotify on your phone, computer or speaker, and Melora's player shows what's playing there and controls it. On Linux this is how Melora plays, because WebKitGTK can't play Spotify's protected audio.
+- **Choose device** under the player moves the music between Melora and your other devices. Its volume slider sets the volume of the device that's playing.
+- The player has shuffle, previous, play or pause, next and repeat, and a bar to move through the track. In a podcast, the buttons beside Play skip back and forward 15 seconds.
+- The **+** beside the track title adds it to your Liked Songs, or removes it.
+
+### Your library
+
+- **Liked Songs**, **Albums**, **Podcasts**, **Your Episodes**, **Recently Played** (your last 50 tracks) and **Queue** (what plays next) are at the top of the sidebar, followed by your playlists.
+- Open an album or podcast to see its tracks or episodes. The **+** beside its name saves it to your library or removes it. Every song row has a **+** for Liked Songs too.
+- **Home** shows what's playing, what you played recently, your playlists, albums and podcasts, and your devices.
+- Spotify only shows the tracks of playlists you own or collaborate on. You can still play the others, or open them in Spotify.
+
+### Search
+
+Open **Search** and type. Results come in as you type, in groups: songs, artists, albums, playlists, podcasts and episodes. **See all** shows more of one group.
+
+### Playlists
+
+- **+ New** in the sidebar creates a private playlist.
+- Right-click a song or episode to add it to the queue or to one of your playlists.
+- In a playlist you own or collaborate on, drag a song to move it, or remove it from its right-click menu. The change is made on Spotify too. If Spotify refuses it, Melora puts the list back and says why.
+- Drag playlists in the sidebar to put them in your own order. Melora keeps that order on this computer and leaves Spotify's order alone. **Use Spotify's order** in a playlist's right-click menu goes back.
+
+### Keyboard and media keys
+
+| Keys                                     | What they do                                                                                                   |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Menu key or Shift+F10                    | Opens the right-click menu of the selected row                                                                 |
+| Alt+↑ and Alt+↓                          | Move the selected song in a playlist, or the selected playlist in the sidebar                                  |
+| Esc                                      | Closes a menu, the device list or the new playlist form                                                        |
+| Play/pause, next and previous media keys | Control what the player shows, in Melora or on another device. In a podcast, next and previous skip 15 seconds |
+
+The system's media controls also work: the media overlay on Windows, and the desktop's media controls on Linux (through MPRIS).
+
+### Settings
+
+- **Interface scale** makes everything larger, from 100% to 200%.
+- **Comfortable track rows** gives lists more space.
+- **Volume** is Melora's own playback volume.
+- **Spotify account** is where you set the Client ID, sign in and sign out.
+
+## Your data
+
+- Melora talks only to Spotify. It has no analytics, ads, tracking or server of its own. Its fonts and icons are inside the app; artwork comes from Spotify.
+- Your Spotify sign-in is kept in the system's credential store: Windows Credential Manager, or the keyring on Linux. Melora never stores your password and never asks for it.
+- On Windows, settings and your Client ID are saved in the `data` folder beside `Melora.exe`. Moving the folder to another computer means signing in again. On Linux they are in `~/.local/share/app.melora.desktop/`.
+- Signing out in Settings removes the sign-in from the credential store.
+
+## If something goes wrong
+
+- **"Spotify refused access."** Add the account to the developer app's **User Management** (step 4 above).
+- **Spotify shows an error about the redirect URI.** The Redirect URI in the Dashboard must be exactly `http://127.0.0.1:43821/callback`.
+- **Melora can't play music itself.** It needs Spotify Premium and Windows. On Linux, start Spotify on another device and Melora controls it.
+- **Linux: Melora signs you out every time it closes.** The keyring isn't running. Start GNOME Keyring or KWallet and sign in again.
+
+## Platforms
+
+- **Windows** is the main platform. Melora plays Spotify itself there, or controls another device.
+- **Linux** packages are for x86_64 and aarch64, tested on Fedora first. Melora controls Spotify on another device. Spotify has no Linux app for aarch64, so on Apple silicon (Asahi) Melora controls a phone, a speaker or another computer.
+- **macOS** is on hold. A macOS build needs a Mac to build on, and macOS's WebView can't play Spotify's protected audio either, so it would only control other devices.
+
+## Build it yourself
+
+To try the interface in a browser (signed out, nothing to sign in to), use Node 22.22.1 or later:
 
 ```sh
 npm ci
 npm run dev
 ```
 
-Open the local address printed by Vite. Browser settings last for the current session. The native app saves preferences on the device.
-
-For native development and portable builds, see [DEVELOPMENT.md](DEVELOPMENT.md).
-
-## Windows (portable)
-
-The build command produces `artifacts/Melora-<version>-windows-x64.zip`. Extract the complete ZIP to a writable folder and launch `Melora.exe`. No installer is required. The system Microsoft Edge WebView2 Runtime is required and is not bundled. Builds are unsigned.
-
-Preferences are saved in `data/preferences.json` beside the executable, and your Spotify Client ID in `data/spotify.json`. An unwritable folder produces a visible error. The Spotify refresh token is stored only in Windows Credential Manager (macOS Keychain or Linux Secret Service elsewhere); moving the portable folder to another computer requires signing in again.
-
-Compilation and runtime verification are separate: each Windows build is tested by hand on Windows.
-
-## Linux
-
-`npm run build:linux` produces packages in `artifacts/linux/` (see [DEVELOPMENT.md](DEVELOPMENT.md#linux-packages)):
-
-| Package                                                           | For                                                | Install                                            |
-| ----------------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
-| `Melora-<version>-1.x86_64.rpm`, `Melora-<version>-1.aarch64.rpm` | Fedora (Asahi Remix on Apple silicon uses aarch64) | `sudo dnf install ./Melora-<version>-1.x86_64.rpm` |
-| `Melora_<version>_amd64.deb`, `Melora_<version>_arm64.deb`        | Ubuntu 22.04 or later, Debian 12 or later          | `sudo apt install ./Melora_<version>_amd64.deb`    |
-| `Melora_<version>_amd64.AppImage`                                 | other x86_64 distributions                         | `chmod +x` it, then run it                         |
-
-The packages install `melora` with a desktop entry and icons, and use the system's WebKitGTK; the AppImage carries its own (from Ubuntu 22.04, with their copyright notices inside), so prefer a package where there is one. Settings live in `~/.local/share/app.melora.desktop/`, and the Spotify refresh token in the desktop's Secret Service (GNOME Keyring or KWallet), which must be running. Packages are unsigned. Uninstall with `sudo dnf remove melora` or `sudo apt remove melora`.
-
-## Platforms
-
-- **Windows** is the main target, as the portable ZIP above. Melora can play Spotify itself there, or control another device.
-- **Linux** packages are above (Fedora first; x86_64 and aarch64). WebKitGTK can't play Spotify's protected audio, so on Linux Melora controls Spotify playing on another device: the Spotify app, a phone or a speaker. Spotify has no Linux app for aarch64, so on Apple silicon (Asahi) Melora controls a phone, a speaker or another computer.
-- **macOS is on hold, to revisit later.** A macOS build has to be made on a Mac with Xcode's Command Line Tools; it can't be built on Linux or Windows. Running a build you made yourself on your own Mac needs no paid Apple Developer account. Giving it to other people without macOS's "unidentified developer" warning does (Developer ID signing and notarisation, $99 a year); the App Store isn't needed either way. macOS's WebView has no Widevine, so Melora would probably control other devices only, as on Linux. To pick it up again: build on a Mac (`npm run tauri build`), test sign-in, device control and media keys, then decide about the developer account.
-
-## Spotify configuration
-
-Melora uses your own Spotify app (bring your own Client ID) and Authorization Code with PKCE. It never uses or asks for a Client Secret or your Spotify password.
-
-1. In the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard), create an app. Add the Redirect URI `http://127.0.0.1:43821/callback` exactly. It starts with `http`, which Spotify permits for loopback addresses (the Dashboard shows a generic "not secure" notice), and it must include the port: the Dashboard refuses the port-less form. Melora listens on that port only while you sign in, and Settings shows the exact URI. Tick **Web API** and **Web Playback SDK**.
-2. Under **User Management**, add every Spotify account that will sign in, including your own. Spotify answers other accounts with "forbidden" errors.
-3. In Melora, open **Settings → Spotify account**, paste the app's Client ID, save, and choose **Sign in with Spotify**. Your browser opens Spotify's approval page.
-
-Melora requests only the scopes the current features need: your profile at sign-in, then more the first time you use playback, your devices, Liked Songs, your playlists, your podcasts or what you played recently. Access tokens stay in the native process memory; nothing is sent anywhere except Spotify. The intended mode is personal, non-commercial Spotify Development Mode, which needs the app owner to have Spotify Premium, allows up to five users and expires sign-ins after six months.
+For the desktop app, the Windows ZIP and the Linux packages, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Licences
 
-Melora's own source is licensed under the [MIT License](LICENSE). Bundled fonts keep their original licences, and the Spotify logo and Like icons are Spotify's trademarks, used only as Spotify's guidelines require and not covered by Melora's licence; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Dependencies keep their own licences.
+Melora's own source is under the [MIT License](LICENSE). The bundled fonts keep their own licences, and the Spotify logo and Like icons are Spotify's trademarks, used as Spotify's guidelines require and not covered by Melora's licence. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Dependencies keep their own licences.
