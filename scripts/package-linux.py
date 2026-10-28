@@ -279,20 +279,35 @@ def same_but_marker(packaged, build, kind):
             and MARKER.fullmatch(build[start:end]) is not None)
 
 
-def sections(data):
-    """An ELF64 little-endian file's sections, by name."""
+def section_ranges(data):
+    """An ELF64 little-endian file's sections, by name, as (offset, length) in the file."""
     check(data[:6] == b'\x7fELF\x02\x01', 'not a 64-bit little-endian ELF file')
     offset, size, count, names = (int.from_bytes(data[a:b], 'little') for a, b in ((0x28, 0x30), (0x3A, 0x3C), (0x3C, 0x3E), (0x3E, 0x40)))
     headers = [data[offset + i * size:offset + (i + 1) * size] for i in range(count)]
-    def body(header):
-        start, length = int.from_bytes(header[0x18:0x20], 'little'), int.from_bytes(header[0x20:0x28], 'little')
-        return data[start:start + length]
-    table = body(headers[names])
+    def span(header):
+        return int.from_bytes(header[0x18:0x20], 'little'), int.from_bytes(header[0x20:0x28], 'little')
+    start, length = span(headers[names])
+    table = data[start:start + length]
     named = {}
     for header in headers:
-        start = int.from_bytes(header[:4], 'little')
-        named[table[start:table.index(b'\0', start)].decode()] = body(header)
+        name = int.from_bytes(header[:4], 'little')
+        named[table[name:table.index(b'\0', name)].decode()] = span(header)
     return named
+
+
+def sections(data):
+    """An ELF64 little-endian file's sections, by name."""
+    return {name: data[start:start + length] for name, (start, length) in section_ranges(data).items()}
+
+
+def same_runtime(appimage, runtime):
+    """The AppImage starts with the pinned runtime, which appimagetool changes only by writing the
+    image's MD5 into the runtime's reserved `.digest_md5` section."""
+    head = appimage[:len(runtime)]
+    if len(head) != len(runtime):
+        return False
+    start, length = section_ranges(runtime).get('.digest_md5', (0, 0))
+    return head[:start] == runtime[:start] and head[start + length:] == runtime[start + length:]
 
 
 # linuxdeploy rewrites the AppImage's binary (its RPATH points at the bundled libraries), so
@@ -356,7 +371,7 @@ def audit(arch, version, release, licences, output, appimage_notices=None, runti
         check(package.is_file() and not package.is_symlink(), f'{package.name} was not built')
         if kind == 'appimage':
             # The notices describe this runtime, the pinned one, in front of the file system.
-            check(runtime is not None and package.read_bytes().startswith(runtime.read_bytes()),
+            check(runtime is not None and same_runtime(package.read_bytes(), runtime.read_bytes()),
                   f'{package.name} does not start with the pinned type2 runtime')
         if kind == 'deb':
             fields = tool('dpkg-deb', '-f', str(package), 'Package', 'Version', 'Architecture', 'Depends')

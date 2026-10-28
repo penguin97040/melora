@@ -174,6 +174,43 @@ class LinuxPackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(packaging.AuditError, 'pinned SHA-256'):
             packaging.upstream_notices(set(packaging.RUNTIME_NOTICES))
 
+    @staticmethod
+    def elf(sections):
+        """A minimal ELF64 file whose named sections follow its header, then their table."""
+        names = b'\0' + b''.join(name.encode() + b'\0' for name, _ in sections) + b'.shstrtab\0'
+        body, spans, at = b'', [], 64
+        for _, data in sections:
+            spans.append((at, len(data)))
+            body += data
+            at += len(data)
+        spans.append((at, len(names)))
+        body += names
+        table_at = 64 + len(body)
+        header = bytearray(64)
+        header[:6] = b'\x7fELF\x02\x01'
+        header[0x28:0x30] = table_at.to_bytes(8, 'little')
+        header[0x3A:0x3C] = (64).to_bytes(2, 'little')
+        header[0x3C:0x3E] = (len(spans)).to_bytes(2, 'little')
+        header[0x3E:0x40] = (len(spans) - 1).to_bytes(2, 'little')
+        table, offset = b'', 1
+        for (name, _), (start, length) in zip([*sections, ('.shstrtab', b'')], spans):
+            entry = bytearray(64)
+            entry[:4] = offset.to_bytes(4, 'little')
+            entry[0x18:0x20] = start.to_bytes(8, 'little')
+            entry[0x20:0x28] = length.to_bytes(8, 'little')
+            table += entry
+            offset += len(name) + 1
+        return bytes(header) + body + table
+
+    def test_the_appimage_runtime_may_differ_only_in_its_digest(self):
+        runtime = self.elf([('.text', b'runtime code'), ('.digest_md5', bytes(16))])
+        start, length = packaging.section_ranges(runtime)['.digest_md5']
+        digest = runtime[:start] + b'\x01' * length + runtime[start + length:]
+        self.assertTrue(packaging.same_runtime(digest + b'squashfs', runtime))
+        self.assertTrue(packaging.same_runtime(runtime + b'squashfs', runtime))
+        self.assertFalse(packaging.same_runtime(runtime.replace(b'runtime', b'RUNTIME') + b'squashfs', runtime))
+        self.assertFalse(packaging.same_runtime(runtime[:10], runtime))
+
     def test_runtime_files_never_ship_from_any_list(self):
         for name in ('spotify.json', 'playlist-order.json', 'preferences.json'):
             self.assertIn(name, packaging.gate.RUNTIME_FILES)
