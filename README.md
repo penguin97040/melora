@@ -43,7 +43,7 @@ Compilation and runtime verification are separate: each Windows build is tested 
 | `Melora_<version>_amd64.deb`, `Melora_<version>_arm64.deb`        | Ubuntu 22.04 or later, Debian 12 or later          | `sudo apt install ./Melora_<version>_amd64.deb`    |
 | `Melora_<version>_amd64.AppImage`                                 | other x86_64 distributions                         | `chmod +x` it, then run it                         |
 
-The packages install `melora` with a desktop entry and icons, and use the system's WebKitGTK; the AppImage carries its own (from Ubuntu 22.04), so prefer a package where there is one. Settings live in `~/.local/share/app.melora.desktop/`, and the Spotify refresh token in the desktop's Secret Service (GNOME Keyring or KWallet), which must be running. Packages are unsigned. Uninstall with `sudo dnf remove melora` or `sudo apt remove melora`.
+The packages install `melora` with a desktop entry and icons, and use the system's WebKitGTK; the AppImage carries its own (from Ubuntu 22.04, with their copyright notices inside), so prefer a package where there is one. Settings live in `~/.local/share/app.melora.desktop/`, and the Spotify refresh token in the desktop's Secret Service (GNOME Keyring or KWallet), which must be running. Packages are unsigned. Uninstall with `sudo dnf remove melora` or `sudo apt remove melora`.
 
 ## Platforms
 
