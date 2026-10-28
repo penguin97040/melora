@@ -15,6 +15,9 @@ if grep -Eq '^tauri([-_][A-Za-z0-9_-]+)? v' <<<"$tree"; then
   fail 'ora-core must not depend on tauri.'
 fi
 
+# ts-rs never deletes a binding it no longer generates, so start from none: a stale file for a
+# removed or renamed type then shows up as a deletion below.
+find src/native/bindings -name '*.ts' -delete
 cargo test --locked -q -p ora-types >/dev/null ||
   fail 'ora-types tests failed.'
 # Compare against the index, so freshly regenerated bindings pass once they are staged.

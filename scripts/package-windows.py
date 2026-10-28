@@ -1,5 +1,6 @@
 """Package an exact, integrity-checked inventory of reviewed runtime files."""
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -7,7 +8,12 @@ import sys
 import tempfile
 import zipfile
 
-FONT_LICENCES = ('Chakra-Petch.txt', 'Share-Tech-Mono.txt', 'Ubuntu-Mono.txt')
+_spec = importlib.util.spec_from_file_location(
+    'publication_gate', Path(__file__).resolve().parent / 'publication_gate.py')
+gate = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gate)
+
+FONT_LICENCES = gate.FONT_LICENCES
 NOTICE = '''Melora for Windows (portable)
 
 Extract the complete folder to a writable location and run Melora.exe.
@@ -23,7 +29,7 @@ on your other devices.
 Melora is unofficial and not affiliated with Spotify.
 '''
 # Files the owner's copy writes at runtime. They must never be packaged.
-NEVER_SHIP = {'spotify.json', 'preferences.json'}
+NEVER_SHIP = set(gate.RUNTIME_FILES)
 
 
 def notice_files():

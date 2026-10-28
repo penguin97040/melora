@@ -4,16 +4,28 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+# Files the app writes at runtime (ora-core config.rs and order.rs, src-tauri preferences.rs).
+# They hold a Client ID, account IDs and settings: never published, never packaged.
+RUNTIME_FILES = ('spotify.json', 'playlist-order.json', 'preferences.json')
+# The bundled fonts' licences (OFL texts that name their authors).
+FONT_LICENCES = ('Chakra-Petch.txt', 'Share-Tech-Mono.txt', 'Ubuntu-Mono.txt')
 PRIVATE = ('agents.md', 'changelog.md', 'mistakes.md', 'codex_start_here.md',
            'instructions.md', 'spotify_client_build_spec.md', 'start-melora-*.ps1',
            'foobar_ui.png', 'claude.md', 'handoff.md', 'do_next.md', 'user_instructions.md',
-           'spotify_integration.md', '.private-archive', 'spotify.json','.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx',
+           'spotify_integration.md', '.private-archive', *RUNTIME_FILES, '.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx',
            '*.mobileprovision', '*.p8', '*.crt', '*.cer', '*.der', '*.keystore', '*.jks', '*.db', '*.sqlite*', '*.exe', '*.zip')
+# The only files that may contain NUL bytes; anything else with one can't be read as text.
+BINARY_SUFFIXES = {'.woff2', '.png', '.ico', '.icns'}
+NOTICE_SOURCES = 'third-party/notices/sources.json'
+# Push sends objects as they are, so replacement refs (`git replace`) must not change what is
+# scanned.
+GIT_ENV = {**os.environ, 'GIT_NO_REPLACE_OBJECTS': '1'}
 OUTPUTS = {'node_modules', 'target', 'dist', 'artifacts', 'data', '.xwin-cache', 'credentials', 'account-data', 'secrets'}
 RULES = {
     'credential': re.compile(r'(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})'),
@@ -33,10 +45,42 @@ class AuditError(Exception):
 
 
 def git(*args):
-    result = subprocess.run(['git', *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(['git', *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=GIT_ENV)
     if result.returncode:
         raise AuditError('Git check incomplete')
     return result.stdout
+
+
+class Blobs:
+    """Reads objects through one `git cat-file --batch` process."""
+
+    def __init__(self):
+        self.process = subprocess.Popen(['git', 'cat-file', '--batch'], stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=GIT_ENV)
+
+    def read(self, oid, kind=b'blob'):
+        self.process.stdin.write(oid.encode() + b'\n')
+        self.process.stdin.flush()
+        header = self.process.stdout.readline().split()
+        if len(header) != 3 or header[1] != kind:
+            raise AuditError('Git check incomplete')
+        data = self.process.stdout.read(int(header[2]))
+        if len(data) != int(header[2]) or self.process.stdout.read(1) != b'\n':
+            raise AuditError('Git check incomplete')
+        return data
+
+    def close(self):
+        self.process.stdin.close()
+        self.process.wait()
+
+
+def notice_hashes(sources):
+    """The upstream licence texts `sources.json` pins: their paths and SHA-256s."""
+    try:
+        entries = json.loads(sources)
+        return {(f'third-party/notices/{e["package"]}/{e["file"]}', e['sha256']) for e in entries}
+    except (TypeError, KeyError, ValueError):
+        return set()
 
 
 def prohibited(path):
@@ -65,7 +109,7 @@ def findings(data, location, *, licence=False, email=None):
     return result
 
 
-def audit_blob(path, data):
+def audit_blob(path, data, notices=frozenset()):
     path_results = findings(path.encode(), 'redacted path ' + hashlib.sha256(path.encode()).hexdigest()[:12])
     # Tauri's standard retina icon name resembles an email address. Only its
     # filename gets this exception; its contents still receive every rule.
@@ -75,12 +119,16 @@ def audit_blob(path, data):
     if prohibited(path):
         return path_results + [('prohibited private/output path', location)]
     # Only known font/icon formats may be binary. Scan ASCII secret signatures too.
-    if b'\0' in data and Path(path).suffix in {'.woff2', '.png', '.ico', '.icns'}:
+    if b'\0' in data:
+        if Path(path).suffix not in BINARY_SUFFIXES:
+            # Text with NULs in it (UTF-16, say) would slip past every rule.
+            return path_results + [('uninspectable binary', location)]
         return path_results + findings(data.decode('latin1').encode(), location)
-    # Licence texts may name their authors' addresses and can't be edited; every other rule still applies.
-    # Upstream notices are pinned by SHA-256 in sources.json, which gets no exception itself.
-    licence = path.startswith('public/fonts/licences/') or (
-        path.startswith('third-party/notices/') and path != 'third-party/notices/sources.json')
+    # Licence texts may name their authors' addresses and can't be edited; every other rule still
+    # applies. Only the font licences and the upstream notices sources.json pins by SHA-256 (in
+    # the same tree) count; anything else beside them, sources.json included, gets every rule.
+    licence = path in {f'public/fonts/licences/{name}' for name in FONT_LICENCES} or (
+        (path, hashlib.sha256(data).hexdigest()) in notices)
     return path_results + findings(data, location, licence=licence)
 
 
@@ -111,6 +159,8 @@ def audit(args):
         raise AuditError('Push destination differs from local approval')
     if git('rev-parse', '--is-shallow-repository').strip() != b'false':
         raise AuditError('Shallow history cannot be fully inspected')
+    if git('for-each-ref', 'refs/replace/'):
+        raise AuditError('Replacement refs must be removed before publishing')
     refs = []
     if args.hook:
         for line in sys.stdin:
@@ -120,42 +170,65 @@ def audit(args):
             if set(fields[1]) != {'0'}:
                 refs.append(fields[1])
     else:
-        head = subprocess.run(['git', 'rev-parse', '--verify', 'HEAD'], capture_output=True)
+        head = subprocess.run(['git', 'rev-parse', '--verify', 'HEAD'], capture_output=True, env=GIT_ENV)
         if head.returncode == 0:
             refs.append(head.stdout.decode().strip())
     # Audit complete ancestry of outgoing refs, including every historical tree.
     seen = set()
     results = []
-    for ref in refs:
-        if git('cat-file', '-t', ref).strip() != b'commit':
-            raise AuditError('Non-commit push object is not supported')
-        for commit in git('rev-list', ref).decode().splitlines():
-            if commit in seen:
-                continue
-            seen.add(commit)
-            raw = git('show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce%x00%B', commit)
-            an, ae, cn, ce, _message = raw.split(b'\0', 4)
-            if any((name.decode() != approved['name'] or mail.decode() != approved['email']) for name, mail in ((an, ae), (cn, ce))):
-                results.append(('unapproved commit identity', commit[:12]))
-            results.extend(findings(git('cat-file', 'commit', commit), 'commit ' + commit[:12], email=approved['email']))
-            for entry in git('ls-tree', '-rz', '--full-tree', commit).split(b'\0'):
-                if not entry:
-                    continue
+    blobs = Blobs()
+    # A file's findings depend on its path, its contents and the notices pinned beside it, so
+    # each combination is scanned once however many commits share it.
+    checked = {}
+
+    def scan(path, oid, notices_oid, notices):
+        key = (path, oid, notices_oid)
+        if key not in checked:
+            checked[key] = audit_blob(path, blobs.read(oid), notices)
+        return checked[key]
+
+    def tree_entries(entries):
+        for entry in entries:
+            if entry:
                 meta, path = entry.split(b'\t', 1)
-                mode, kind, oid = meta.split()
-                path = path.decode('utf-8')
-                if kind != b'blob' or mode == b'120000':
-                    raise AuditError('Submodules/symlinks require an explicit audit')
-                results.extend(audit_blob(path, git('cat-file', 'blob', oid.decode())))
-    # Also check current index (even when working copy has been sanitised).
-    for entry in git('ls-files', '--stage', '-z').split(b'\0'):
-        if not entry:
-            continue
-        meta, path = entry.split(b'\t', 1)
-        mode, oid, stage = meta.split()
-        if stage != b'0' or mode in {b'120000', b'160000'}:
-            raise AuditError('Index has unresolved or unsupported entries')
-        results.extend(audit_blob(path.decode(), git('cat-file', 'blob', oid.decode())))
+                yield meta.split(), path.decode('utf-8')
+
+    try:
+        for ref in refs:
+            if git('cat-file', '-t', ref).strip() != b'commit':
+                raise AuditError('Non-commit push object is not supported')
+            for commit in git('rev-list', ref).decode().splitlines():
+                if commit in seen:
+                    continue
+                seen.add(commit)
+                raw = git('show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce%x00%B', commit)
+                an, ae, cn, ce, _message = raw.split(b'\0', 4)
+                if any((name.decode() != approved['name'] or mail.decode() != approved['email']) for name, mail in ((an, ae), (cn, ce))):
+                    results.append(('unapproved commit identity', commit[:12]))
+                results.extend(findings(blobs.read(commit, b'commit'), 'commit ' + commit[:12], email=approved['email']))
+                entries = []
+                for (mode, kind, oid), path in tree_entries(git('ls-tree', '-rz', '--full-tree', commit).split(b'\0')):
+                    if kind != b'blob' or mode == b'120000':
+                        raise AuditError('Submodules/symlinks require an explicit audit')
+                    entries.append((path, oid.decode()))
+                sources = dict(entries).get(NOTICE_SOURCES)
+                notices = notice_hashes(blobs.read(sources)) if sources else set()
+                for path, oid in entries:
+                    results.extend(scan(path, oid, sources, notices))
+        # Also check current index (even when working copy has been sanitised).
+        index = []
+        for (mode, oid, stage), path in tree_entries(git('ls-files', '--stage', '-z').split(b'\0')):
+            if stage != b'0' or mode in {b'120000', b'160000'}:
+                raise AuditError('Index has unresolved or unsupported entries')
+            index.append((path, oid.decode()))
+        sources = dict(index).get(NOTICE_SOURCES)
+        notices = notice_hashes(blobs.read(sources)) if sources else set()
+        for path, oid in index:
+            results.extend(scan(path, oid, sources, notices))
+    finally:
+        blobs.close()
+    working = Path(NOTICE_SOURCES)
+    notices = notice_hashes(working.read_bytes()) if working.is_file() else set()
     for raw in git('ls-files', '--cached', '--others', '--exclude-standard', '-z').split(b'\0'):
         if raw:
             path = raw.decode()
@@ -164,7 +237,7 @@ def audit(args):
             if Path(path).exists() and not Path(path).is_file():
                 raise AuditError('Publishable working entry is not a regular file')
             if Path(path).is_file():
-                results.extend(audit_blob(path, Path(path).read_bytes()))
+                results.extend(audit_blob(path, Path(path).read_bytes(), notices))
     if results:
         for rule, location in sorted(set(results)):
             print('BLOCKED: ' + rule + ' at ' + json.dumps(location, ensure_ascii=True), file=sys.stderr)

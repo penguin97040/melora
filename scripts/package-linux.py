@@ -31,7 +31,8 @@ windows = load('package_windows', 'package-windows.py')
 gate = load('publication_gate', 'publication_gate.py')
 
 # Packages carry no private docs and no files the app writes at runtime.
-PRIVATE = tuple(p for p in gate.PRIVATE if not p.startswith('*.')) + ('playlist-order.json', 'preferences.json')
+# (`gate.PRIVATE` includes `gate.RUNTIME_FILES`.)
+PRIVATE = tuple(p for p in gate.PRIVATE if not p.startswith('*.'))
 ARCHES = {
     'x86_64': {'deb': 'amd64', 'machine': 'Advanced Micro Devices X86-64',
                'interpreter': '/lib64/ld-linux-x86-64.so.2', 'appimage': True},
@@ -154,17 +155,27 @@ def audit_binary(arch, binary):
     return sorted(needed), '.'.join(map(str, glibc))
 
 
+def first_difference(a, b, step=1 << 16):
+    """Where two different byte strings of the same length first differ, a block at a time."""
+    at = 0
+    while a[at:at + step] == b[at:at + step]:
+        at += step
+    return next(i for i in range(at, at + step) if a[i] != b[i])
+
+
 def same_but_marker(packaged, build, kind):
     """A package's binary is the build except, at most, one bundle type marker set to that package's type."""
     if len(packaged) != len(build):
         return False
-    differ = [i for i in range(len(build)) if packaged[i] != build[i]] if packaged != build else []
-    if not differ:
+    if packaged == build:
         return True
+    first = first_difference(packaged, build)
     size = len(MARKERS[kind])
-    start = packaged.find(MARKERS[kind], max(0, differ[0] - size + 1), differ[0] + size)
+    start = packaged.find(MARKERS[kind], max(0, first - size + 1), first + size)
     end = start + size
-    return start >= 0 and differ[-1] < end and MARKER.fullmatch(build[start:end]) is not None
+    # Every difference lies inside that one marker: the bytes before it are equal by definition.
+    return (0 <= start <= first and packaged[end:] == build[end:]
+            and MARKER.fullmatch(build[start:end]) is not None)
 
 
 def sections(data):

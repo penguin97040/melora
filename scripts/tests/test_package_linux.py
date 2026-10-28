@@ -107,6 +107,18 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertTrue(packaging.same_but_marker(build, build, 'appimage'))
         self.assertFalse(packaging.same_but_marker(self.binary, build, 'rpm'))
         self.assertFalse(packaging.same_but_marker(self.binary.replace(b'end', b'END'), build, 'deb'))
+        # Large binaries, with the marker far from the start, and a second difference after it.
+        filler = bytes(range(256)) * 4096
+        big_build, big = filler + build + filler, filler + self.binary + filler
+        self.assertTrue(packaging.same_but_marker(big, big_build, 'deb'))
+        self.assertFalse(packaging.same_but_marker(big[:-1] + b'!', big_build, 'deb'))
+        self.assertFalse(packaging.same_but_marker(b'!' + big[1:], big_build, 'deb'))
+
+    def test_runtime_files_never_ship_from_any_list(self):
+        for name in ('spotify.json', 'playlist-order.json', 'preferences.json'):
+            self.assertIn(name, packaging.gate.RUNTIME_FILES)
+            self.assertIn(name, packaging.windows.NEVER_SHIP)
+            self.assertIn(name, packaging.PRIVATE)
 
     def test_a_wrong_desktop_entry_fails(self):
         root = self.package_tree()

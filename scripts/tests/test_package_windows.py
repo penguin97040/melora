@@ -72,7 +72,7 @@ class PackagingTests(unittest.TestCase):
     def test_account_and_settings_files_are_never_packaged(self):
         release = Path('artifacts/Melora-0.1.0-windows-x64.zip')
         release.write_bytes(b'previous synthetic release')
-        for name in ('spotify.json', 'Preferences.json'):
+        for name in ('spotify.json', 'Preferences.json', 'playlist-order.json'):
             planted = self.root / name
             planted.write_text('{"synthetic": true}')
             manifest = dict(self.manifest, **{name: hashlib.sha256(planted.read_bytes()).hexdigest()})
