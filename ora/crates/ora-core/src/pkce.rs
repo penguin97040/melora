@@ -3,6 +3,7 @@
 use crate::secret::Secret;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 pub struct Pkce {
     pub verifier: Secret,
@@ -11,10 +12,7 @@ pub struct Pkce {
 
 /// 64 random bytes give an 86-character verifier (RFC 7636 allows 43 to 128).
 pub fn generate() -> Result<Pkce, getrandom::Error> {
-    let mut bytes = [0u8; 64];
-    getrandom::fill(&mut bytes)?;
-    let verifier = Secret::new(URL_SAFE_NO_PAD.encode(bytes));
-    bytes.fill(0);
+    let verifier = random::<64>()?;
     let challenge = challenge(verifier.expose());
     Ok(Pkce {
         verifier,
@@ -28,11 +26,15 @@ pub fn challenge(verifier: &str) -> String {
 
 /// 32 random bytes, URL-safe, for matching the callback to this sign-in.
 pub fn state() -> Result<Secret, getrandom::Error> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes)?;
-    let value = Secret::new(URL_SAFE_NO_PAD.encode(bytes));
-    bytes.fill(0);
-    Ok(value)
+    random::<32>()
+}
+
+/// `N` random bytes, URL-safe. The raw bytes are wiped however this returns, which a plain
+/// `fill(0)` doesn't promise: the optimiser may drop a store that is never read.
+fn random<const N: usize>() -> Result<Secret, getrandom::Error> {
+    let mut bytes = Zeroizing::new([0u8; N]);
+    getrandom::fill(bytes.as_mut_slice())?;
+    Ok(Secret::new(URL_SAFE_NO_PAD.encode(bytes.as_slice())))
 }
 
 #[cfg(test)]
