@@ -1,7 +1,8 @@
 """Stage the Linux packages' licences, then audit the packages Tauri built from them.
 
   package-linux.py stage <licences dir>
-  package-linux.py audit <arch> <version> <release dir> <licences dir> <output dir>
+  package-linux.py appimage-notices <AppImage> <output dir>
+  package-linux.py audit <arch> <version> <release dir> <licences dir> <output dir> [<AppImage notices> <runtime>]
 
 The audit runs in the build container (it needs dpkg-deb, rpm, cpio and readelf).
 Diagnostics name files and checks, never file contents.
@@ -64,6 +65,25 @@ ICONS = {
     'usr/share/icons/hicolor/512x512/apps/melora.png',
 }
 LICENCES = 'usr/share/doc/melora/licences'
+# The AppImage carries its own libraries (linuxdeploy and its GTK plugin copy them from the build
+# image), so it carries their notices too: each owning Ubuntu package's copyright file, where
+# Debian puts it. linuxdeploy copies most of them itself; `appimage-notices` finds the rest.
+SYSTEM_NOTICES = 'usr/share/doc'
+# Files linuxdeploy and its GTK plugin generate in the AppDir. No package owns them.
+GENERATED = {'usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache', 'usr/lib/gtk-3.0/3.0.0/immodules.cache',
+             'usr/lib/gio/modules/giomodule.cache', 'usr/share/glib-2.0/schemas/gschemas.compiled'}
+# The AppImage's own parts, under the upstream notice (third-party/notices/<slug>) that covers each.
+APPIMAGE_PARTS = {
+    'AppRun': 'linuxdeploy-07333c6',  # the script linuxdeploy writes
+    'AppRun.wrapped': 'appimagekit-13',  # AppImageKit's AppRun
+    'apprun-hooks/linuxdeploy-plugin-gtk.sh': 'linuxdeploy-plugin-gtk-7a3fbc3',
+}
+# The type2 runtime in front of the AppImage's file system, and what it links statically.
+RUNTIME_NOTICES = ('appimage-type2-runtime-20251108', 'libfuse-3.15.0', 'squashfuse-0.5.2', 'musl-1.2.5',
+                   'zstd-1.5.6', 'zlib-1.3.1')
+APPIMAGE_NOTICES = 'usr/share/doc/melora/appimage'
+# Melora's own files at the top of the AppImage.
+APPIMAGE_OWN = {'Melora.desktop', 'Melora.png', 'melora.png', '.DirIcon'}
 # Tauri writes the package type into each package's copy of the binary; nothing else may differ.
 MARKER = re.compile(rb'__TAURI_BUNDLE_TYPE_VAR_[A-Z]{3}')
 MARKERS = {'deb': b'__TAURI_BUNDLE_TYPE_VAR_DEB', 'rpm': b'__TAURI_BUNDLE_TYPE_VAR_RPM',
@@ -80,7 +100,7 @@ def check(condition, message):
 
 
 def stage(output):
-    contents = {'THIRD_PARTY_NOTICES.md': Path('THIRD_PARTY_NOTICES.md')}
+    contents = {'LICENSE': Path('LICENSE'), 'THIRD_PARTY_NOTICES.md': Path('THIRD_PARTY_NOTICES.md')}
     contents.update((f'fonts/{name}', Path('public/fonts/licences') / name) for name in windows.FONT_LICENCES)
     data = {}
     for name, file in contents.items():
@@ -94,6 +114,87 @@ def stage(output):
         (output / name).parent.mkdir(parents=True, exist_ok=True)
         (output / name).write_bytes(value)
     print(f'Staged {len(data)} licence files.')
+
+
+def upstream_notices(slugs):
+    """The pinned upstream notices for `slugs`, checked against sources.json."""
+    sources = gate.notice_hashes(Path(gate.NOTICE_SOURCES).read_bytes())
+    found = {}
+    for path, digest in sorted(sources):
+        slug = Path(path).parent.name
+        if slug in slugs:
+            data = Path(path).read_bytes()
+            check(hashlib.sha256(data).hexdigest() == digest, f'{path} differs from its pinned SHA-256')
+            found[f'{slug}/{Path(path).name}'] = data
+    check({name.split('/')[0] for name in found} == set(slugs), 'an AppImage notice is not pinned')
+    return found
+
+
+def from_packages(found):
+    """The AppImage's files that came from the build image's packages (not Melora's own)."""
+    own = ('usr/bin/melora', 'usr/share/applications/', 'usr/share/icons/', 'usr/share/doc/')
+    return sorted(name for name in found if not name.startswith(own) and name not in APPIMAGE_OWN
+                  and name not in GENERATED and name not in APPIMAGE_PARTS)
+
+
+def dpkg_owners(names):
+    """The installed packages that own a file of each name, from one `dpkg -S`."""
+    owners = {name: set() for name in names}
+    if not owners:
+        return owners
+    # dpkg exits non-zero when a pattern matches nothing; an unowned file is reported by the caller.
+    result = subprocess.run(['dpkg', '-S', *(f'*/{name}' for name in sorted(owners))], capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        packages, separator, path = line.partition(': ')
+        name = path.rsplit('/', 1)[-1]
+        if separator and not line.startswith('diversion') and name in owners and path.endswith('/' + name):
+            owners[name].update(package.strip().split(':')[0] for package in packages.split(','))
+    return owners
+
+
+def packages_needed(found, owners=dpkg_owners):
+    """Every package whose files the AppImage bundles. Fails on a file no package owns."""
+    bundled = from_packages(found)
+    by_name = owners({Path(name).name for name in bundled})
+    unowned = [name for name in bundled if not by_name[Path(name).name]]
+    check(not unowned, f'bundled files no package owns: {unowned[:5]}')
+    return set().union(*(by_name[Path(name).name] for name in bundled))
+
+
+def appimage_notices(appimage, output):
+    """After a first AppImage build: the copyright files it still lacks, and its own parts' notices."""
+    with tempfile.TemporaryDirectory() as directory:
+        found = files(extract('appimage', appimage, Path(directory)))
+        missing = sorted(package for package in packages_needed(found)
+                         if f'{SYSTEM_NOTICES}/{package}/copyright' not in found)
+    if output.exists():
+        shutil.rmtree(output)
+    for package in missing:
+        copyright = Path('/usr/share/doc') / package / 'copyright'
+        check(copyright.is_file(), f'{package} has no copyright file')
+        (output / 'system' / package).mkdir(parents=True)
+        (output / 'system' / package / 'copyright').write_bytes(copyright.read_bytes())
+    for name, data in upstream_notices(set(APPIMAGE_PARTS.values()) | set(RUNTIME_NOTICES)).items():
+        (output / 'appimage' / name).parent.mkdir(parents=True, exist_ok=True)
+        (output / 'appimage' / name).write_bytes(data)
+    print(f'AppImage notices: {len(missing)} copyright files to add, {len(APPIMAGE_PARTS) + len(RUNTIME_NOTICES)} upstream notices.')
+
+
+def audit_appimage(found, appimage_notices, owners=dpkg_owners):
+    """Every bundled file's package has its copyright file, and the AppImage's own parts and its
+    runtime have their notices."""
+    for part in APPIMAGE_PARTS:
+        check(part in found, f'{part} is missing')
+    lacking = sorted(package for package in packages_needed(found, owners)
+                     if f'{SYSTEM_NOTICES}/{package}/copyright' not in found)
+    check(not lacking, f'no copyright file for bundled packages: {lacking[:5]}')
+    staged = files(appimage_notices / 'appimage')
+    packaged = {name[len(APPIMAGE_NOTICES) + 1:]: path for name, path in found.items()
+                if name.startswith(APPIMAGE_NOTICES + '/')}
+    check(set(packaged) == set(staged) and all(packaged[name].read_bytes() == staged[name].read_bytes() for name in staged),
+          'the AppImage notices differ from the staged ones')
+    slugs = {name.split('/')[0] for name in packaged}
+    check(slugs == set(APPIMAGE_PARTS.values()) | set(RUNTIME_NOTICES), 'an AppImage notice is missing')
 
 
 def files(root):
@@ -206,7 +307,7 @@ def same_program(packaged, build, kind):
     return all(same_but_marker(mine[name], theirs[name], kind) for name in PROGRAM)
 
 
-def audit_tree(root, binary, licences, kind):
+def audit_tree(root, binary, licences, kind, appimage_notices=None):
     found = files(root)
     for name in found:
         parts = Path(name.lower()).parts
@@ -226,7 +327,10 @@ def audit_tree(root, binary, licences, kind):
     entries = dict(line.split('=', 1) for line in lines[1:] if line.strip())
     check(entries.get('Comment') and {k: v for k, v in entries.items() if k != 'Comment'} == DESKTOP,
           f'Melora.desktop is wrong: {sorted(entries)}')
-    if kind != 'appimage':
+    if kind == 'appimage':
+        check(appimage_notices is not None, 'the AppImage needs its notices')
+        audit_appimage(found, appimage_notices)
+    else:
         expected = {'usr/bin/melora', 'usr/share/applications/Melora.desktop'} | ICONS
         expected |= {f'{LICENCES}/{name}' for name in staged}
         check(set(found) == expected, f'unexpected package files: {sorted(set(found) ^ expected)}')
@@ -236,7 +340,7 @@ def audit_tree(root, binary, licences, kind):
     return len(found)
 
 
-def audit(arch, version, release, licences, output):
+def audit(arch, version, release, licences, output, appimage_notices=None, runtime=None):
     spec = ARCHES[arch]
     binary = release / 'melora'
     needed, glibc = audit_binary(arch, binary)
@@ -250,6 +354,10 @@ def audit(arch, version, release, licences, output):
     report = []
     for kind, package in packages.items():
         check(package.is_file() and not package.is_symlink(), f'{package.name} was not built')
+        if kind == 'appimage':
+            # The notices describe this runtime, the pinned one, in front of the file system.
+            check(runtime is not None and package.read_bytes().startswith(runtime.read_bytes()),
+                  f'{package.name} does not start with the pinned type2 runtime')
         if kind == 'deb':
             fields = tool('dpkg-deb', '-f', str(package), 'Package', 'Version', 'Architecture', 'Depends')
             check(fields.splitlines() == ['Package: melora', f'Version: {version}', f'Architecture: {spec["deb"]}',
@@ -261,7 +369,8 @@ def audit(arch, version, release, licences, output):
                         if not line.startswith('rpmlib(')}
             check(requires == REQUIRES, f'{package.name} requires {sorted(requires)}')
         with tempfile.TemporaryDirectory() as directory:
-            count = audit_tree(extract(kind, package, Path(directory)), binary.read_bytes(), licences, kind)
+            count = audit_tree(extract(kind, package, Path(directory)), binary.read_bytes(), licences, kind,
+                               appimage_notices)
         report.append((package, count))
 
     output.mkdir(parents=True, exist_ok=True)
@@ -281,8 +390,11 @@ def main():
     try:
         if sys.argv[1:2] == ['stage'] and len(sys.argv) == 3:
             stage(Path(sys.argv[2]))
-        elif sys.argv[1:2] == ['audit'] and len(sys.argv) == 7 and sys.argv[2] in ARCHES:
-            audit(sys.argv[2], sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5]), Path(sys.argv[6]))
+        elif sys.argv[1:2] == ['appimage-notices'] and len(sys.argv) == 4:
+            appimage_notices(Path(sys.argv[2]), Path(sys.argv[3]))
+        elif sys.argv[1:2] == ['audit'] and len(sys.argv) in (7, 9) and sys.argv[2] in ARCHES:
+            audit(sys.argv[2], sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5]), Path(sys.argv[6]),
+                  *(Path(argument) for argument in sys.argv[7:]))
         else:
             raise AuditError(__doc__.strip().splitlines()[2])
     except (AuditError, ValueError, OSError, subprocess.CalledProcessError) as error:

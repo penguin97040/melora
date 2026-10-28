@@ -7,7 +7,14 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -188,33 +195,39 @@ for (const arch of arches) {
   const files = { '/usr/share/doc/melora/licences': licences };
   // Melora's HTTPS client verifies Spotify's certificates against the system's CA store.
   const depends = ['ca-certificates'];
-  await writeFile(
-    path.join(work, 'tauri.linux.json'),
-    JSON.stringify(
-      {
-        bundle: {
-          active: true,
-          icon: [
-            'icons/32x32.png',
-            'icons/64x64.png',
-            'icons/128x128.png',
-            'icons/icon.png',
-          ],
-          category: 'Music',
-          shortDescription: 'A personal desktop music client',
-          longDescription:
-            'Melora is an unofficial desktop client for Spotify. On Linux it controls Spotify playing on another device.',
-          linux: {
-            deb: { files, depends, section: 'sound' },
-            rpm: { files, depends, release: '1' },
-            appimage: { files, bundleMediaFramework: false },
+  // `appimageFiles`: what the AppImage carries besides Melora's licences (its notices).
+  const writeConfig = (name, appimageFiles = {}) =>
+    writeFile(
+      path.join(work, name),
+      JSON.stringify(
+        {
+          bundle: {
+            active: true,
+            icon: [
+              'icons/32x32.png',
+              'icons/64x64.png',
+              'icons/128x128.png',
+              'icons/icon.png',
+            ],
+            category: 'Music',
+            shortDescription: 'A personal desktop music client',
+            longDescription:
+              'Melora is an unofficial desktop client for Spotify. On Linux it controls Spotify playing on another device.',
+            linux: {
+              deb: { files, depends, section: 'sound' },
+              rpm: { files, depends, release: '1' },
+              appimage: {
+                files: { ...files, ...appimageFiles },
+                bundleMediaFramework: false,
+              },
+            },
           },
         },
-      },
-      null,
-      2,
-    ) + '\n',
-  );
+        null,
+        2,
+      ) + '\n',
+    );
+  await writeConfig('tauri.linux.json');
   if (target.bundles.includes('appimage')) {
     const tools = path.join(work, 'cache', 'tauri');
     await mkdir(tools, { recursive: true });
@@ -269,18 +282,48 @@ for (const arch of arches) {
       image,
       ...command,
     ]);
-  container(
-    'node',
-    'node_modules/@tauri-apps/cli/tauri.js',
-    'build',
-    '--ci',
-    '--target',
-    target.triple,
-    '--bundles',
-    target.bundles,
-    '--config',
-    `${work}/tauri.linux.json`,
-  );
+  const build = (bundles, config) =>
+    container(
+      'node',
+      'node_modules/@tauri-apps/cli/tauri.js',
+      'build',
+      '--ci',
+      '--target',
+      target.triple,
+      '--bundles',
+      bundles,
+      '--config',
+      `${work}/${config}`,
+    );
+  build(target.bundles, 'tauri.linux.json');
+  const audit = [];
+  if (target.bundles.includes('appimage')) {
+    // The AppImage carries the build image's libraries, so it carries their notices too. Only
+    // the first build shows which libraries linuxdeploy bundles; the copyright files it doesn't
+    // copy itself are then added, and the AppImage is bundled again (the program isn't rebuilt).
+    const notices = path.join(work, 'appimage-notices');
+    container(
+      'python3',
+      'scripts/package-linux.py',
+      'appimage-notices',
+      `/target/${target.triple}/release/bundle/appimage/Melora_${version}_amd64.AppImage`,
+      `/src/${notices}`,
+    );
+    const system = existsSync(path.join(notices, 'system'))
+      ? await readdir(path.join(notices, 'system'))
+      : [];
+    await writeConfig('tauri.appimage.json', {
+      ...Object.fromEntries(
+        system.map((name) => [
+          `/usr/share/doc/${name}/copyright`,
+          `/src/${notices}/system/${name}/copyright`,
+        ]),
+      ),
+      '/usr/share/doc/melora/appimage': `/src/${notices}/appimage`,
+    });
+    build('appimage', 'tauri.appimage.json');
+    audit.push(`/src/${notices}`, environment.LDAI_RUNTIME_FILE);
+  }
   container(
     'python3',
     'scripts/package-linux.py',
@@ -290,5 +333,6 @@ for (const arch of arches) {
     `/target/${target.triple}/release`,
     licences,
     'artifacts/linux',
+    ...audit,
   );
 }

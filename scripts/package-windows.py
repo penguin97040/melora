@@ -71,7 +71,7 @@ def package(exe, version):
     offset = int.from_bytes(executable[60:64], 'little')
     if executable[offset:offset + 6] != b'PE\0\0\x64\x86':
         raise ValueError('Release executable must be Windows x64')
-    files = {'licences/THIRD_PARTY_NOTICES.md': Path('THIRD_PARTY_NOTICES.md')}
+    files = {'licences/LICENSE': Path('LICENSE'), 'licences/THIRD_PARTY_NOTICES.md': Path('THIRD_PARTY_NOTICES.md')}
     files.update((f'licences/fonts/{name}', Path('public/fonts/licences') / name) for name in FONT_LICENCES)
     dependencies = notice_files()
     # Capture bytes after validation so the archive and post-write audit agree.

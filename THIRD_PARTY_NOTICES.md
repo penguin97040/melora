@@ -22,6 +22,8 @@ The Spotify logo and the Like (+) icon are trademarks and assets of Spotify AB. 
 
 ## Libraries
 
-React, React DOM and their scheduler use the MIT licence. Tauri, serde and serde_json use MIT OR Apache-2.0. Transitive dependency licences and original notices are collected in the portable archive by the build process. Build tooling is not shipped as an application runtime. System WebView components remain supplied by the operating system.
+React, React DOM and their scheduler use the MIT licence. Tauri, serde and serde_json use MIT OR Apache-2.0. Transitive dependency licences and original notices are collected in the portable archive by the build process. Build tooling is not shipped as an application runtime.
+
+On Windows, and in the Linux `.deb` and `.rpm` packages, the WebView (WebView2, WebKitGTK) and the libraries it uses come from the operating system. The Linux AppImage instead carries its own copies of WebKitGTK, GTK, GStreamer and the libraries they use, taken unmodified from Ubuntu 22.04. Most are under the GNU LGPL; each package's copyright file and licence terms are in the AppImage at `usr/share/doc/<package>/copyright`, and the corresponding sources are available from Ubuntu. The AppImage's runtime (which contains libfuse, squashfuse, musl, zstd and zlib) and its start-up scripts (AppImageKit's AppRun, linuxdeploy and its GTK plugin) have their notices in `usr/share/doc/melora/appimage`.
 
 Melora's own source is licensed under the MIT License (`LICENSE`). It doesn't cover the fonts, the Spotify brand assets or the libraries above, which keep their own licences.

@@ -40,6 +40,7 @@ class LinuxPackagingTests(unittest.TestCase):
         for name in packaging.windows.FONT_LICENCES:
             (fonts / name).write_text('Synthetic font licence\n')
         Path('THIRD_PARTY_NOTICES.md').write_text('Synthetic runtime notices\n')
+        Path('LICENSE').write_text('Synthetic Melora licence\n')
         self.licences = Path('staged')
         packaging.stage(self.licences)
         self.binary = b'\x7fELF synthetic release __TAURI_BUNDLE_TYPE_VAR_DEB end'
@@ -62,7 +63,7 @@ class LinuxPackagingTests(unittest.TestCase):
 
     def test_stage_writes_the_notice_inventory(self):
         staged = sorted(p.relative_to(self.licences).as_posix() for p in self.licences.rglob('*') if p.is_file())
-        self.assertEqual(staged, ['THIRD_PARTY_NOTICES.md', 'dependencies/LICENSE.txt',
+        self.assertEqual(staged, ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'dependencies/LICENSE.txt',
                                   'dependencies/dependency-licences.json',
                                   *sorted(f'fonts/{name}' for name in packaging.windows.FONT_LICENCES)])
 
@@ -74,7 +75,7 @@ class LinuxPackagingTests(unittest.TestCase):
     def test_exact_package_passes(self):
         root = self.package_tree()
         count = packaging.audit_tree(root, self.binary, self.licences, 'deb')
-        self.assertEqual(count, 2 + len(packaging.ICONS) + 6)
+        self.assertEqual(count, 2 + len(packaging.ICONS) + 7)
 
     def test_private_and_account_files_are_refused(self):
         for name in ('HANDOFF.md', 'spotify.json', 'playlist-order.json'):
@@ -113,6 +114,65 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertTrue(packaging.same_but_marker(big, big_build, 'deb'))
         self.assertFalse(packaging.same_but_marker(big[:-1] + b'!', big_build, 'deb'))
         self.assertFalse(packaging.same_but_marker(b'!' + big[1:], big_build, 'deb'))
+
+    def appimage_tree(self):
+        """A package tree as an AppImage: its own parts, two bundled libraries and their notices."""
+        root = self.package_tree()
+        for part in packaging.APPIMAGE_PARTS:
+            (root / part).parent.mkdir(parents=True, exist_ok=True)
+            (root / part).write_text('synthetic part')
+        (root / 'usr/lib').mkdir(parents=True)
+        (root / 'usr/lib/libgtk-3.so.0').write_bytes(b'\x7fELF gtk')
+        (root / 'usr/lib/gio/modules').mkdir(parents=True)
+        (root / 'usr/lib/gio/modules/libgiognutls.so').write_bytes(b'\x7fELF gio')
+        (root / 'usr/lib/gio/modules/giomodule.cache').write_text('generated')
+        for package in ('libgtk-3-0', 'glib-networking'):
+            (root / 'usr/share/doc' / package).mkdir(parents=True)
+            (root / 'usr/share/doc' / package / 'copyright').write_text('synthetic copyright')
+        notices = Path('appimage-notices/appimage')
+        for slug in {*packaging.APPIMAGE_PARTS.values(), *packaging.RUNTIME_NOTICES}:
+            for target in (notices / slug, root / packaging.APPIMAGE_NOTICES / slug):
+                target.mkdir(parents=True, exist_ok=True)
+                (target / 'LICENSE').write_text(f'{slug} licence')
+        return root
+
+    @staticmethod
+    def owners(names):
+        known = {'libgtk-3.so.0': {'libgtk-3-0'}, 'libgiognutls.so': {'glib-networking'}}
+        return {name: known.get(name, set()) for name in names}
+
+    def test_the_appimage_has_a_notice_for_everything_it_bundles(self):
+        root = self.appimage_tree()
+        found = packaging.files(root)
+        packaging.audit_appimage(found, Path('appimage-notices'), self.owners)
+        # A plugin-copied module whose package's copyright is missing.
+        (root / 'usr/share/doc/glib-networking/copyright').unlink()
+        with self.assertRaisesRegex(packaging.AuditError, 'glib-networking'):
+            packaging.audit_appimage(packaging.files(root), Path('appimage-notices'), self.owners)
+        (root / 'usr/share/doc/glib-networking/copyright').write_text('synthetic copyright')
+        # A library no package owns can't be accounted for.
+        (root / 'usr/lib/libmystery.so').write_bytes(b'\x7fELF ?')
+        with self.assertRaisesRegex(packaging.AuditError, 'no package owns'):
+            packaging.audit_appimage(packaging.files(root), Path('appimage-notices'), self.owners)
+        (root / 'usr/lib/libmystery.so').unlink()
+        # The runtime's and AppRun's notices must be there, exactly as staged.
+        (root / packaging.APPIMAGE_NOTICES / 'libfuse-3.15.0' / 'LICENSE').write_text('Altered')
+        with self.assertRaisesRegex(packaging.AuditError, 'AppImage notices differ'):
+            packaging.audit_appimage(packaging.files(root), Path('appimage-notices'), self.owners)
+
+    def test_appimage_notices_come_pinned(self):
+        notices = Path('third-party/notices')
+        entries = []
+        for slug in {*packaging.APPIMAGE_PARTS.values(), *packaging.RUNTIME_NOTICES}:
+            (notices / slug).mkdir(parents=True)
+            (notices / slug / 'LICENSE').write_text(f'{slug} licence')
+            entries.append({'package': slug, 'file': 'LICENSE', 'source': 'https://example.invalid',
+                            'sha256': hashlib.sha256(f'{slug} licence'.encode()).hexdigest()})
+        (notices / 'sources.json').write_text(json.dumps(entries))
+        self.assertEqual(len(packaging.upstream_notices(set(packaging.RUNTIME_NOTICES))), len(packaging.RUNTIME_NOTICES))
+        (notices / 'musl-1.2.5' / 'LICENSE').write_text('Altered')
+        with self.assertRaisesRegex(packaging.AuditError, 'pinned SHA-256'):
+            packaging.upstream_notices(set(packaging.RUNTIME_NOTICES))
 
     def test_runtime_files_never_ship_from_any_list(self):
         for name in ('spotify.json', 'playlist-order.json', 'preferences.json'):

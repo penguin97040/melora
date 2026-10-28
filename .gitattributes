@@ -2,7 +2,7 @@
 * text=auto eol=lf
 
 # Preserve original legal notices byte-for-byte, including upstream whitespace.
-third-party/notices/**/*.txt -text -whitespace
+third-party/notices/*/** -text -whitespace
 public/fonts/licences/*.txt -text -whitespace
 *.woff2 binary
 *.png binary

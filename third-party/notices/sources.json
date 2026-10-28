@@ -65,5 +65,59 @@
     "file": "LICENSE-MIT.txt",
     "source": "https://raw.githubusercontent.com/tauri-apps/libappindicator-rs/eafd1e3682a1247f595410266091e9684021cb6f/LICENSE-MIT",
     "sha256": "eb227437252b2a7a9c1fc342c93ade1f3d7ce38cc6dd754f613db07d53ceff0b"
+  },
+  {
+    "package": "appimage-type2-runtime-20251108",
+    "file": "LICENSE",
+    "source": "https://raw.githubusercontent.com/AppImage/type2-runtime/20251108/LICENSE",
+    "sha256": "aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1"
+  },
+  {
+    "package": "libfuse-3.15.0",
+    "file": "LGPL2.txt",
+    "source": "https://raw.githubusercontent.com/libfuse/libfuse/fuse-3.15.0/LGPL2.txt",
+    "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+  },
+  {
+    "package": "squashfuse-0.5.2",
+    "file": "LICENSE",
+    "source": "https://raw.githubusercontent.com/vasi/squashfuse/0.5.2/LICENSE",
+    "sha256": "9e909cc8a8ba27b1a649c964cf9eda37de911f3138c2b64e6d2f01703904ac13"
+  },
+  {
+    "package": "musl-1.2.5",
+    "file": "COPYRIGHT",
+    "source": "https://raw.githubusercontent.com/kraj/musl/v1.2.5/COPYRIGHT",
+    "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af"
+  },
+  {
+    "package": "zstd-1.5.6",
+    "file": "LICENSE",
+    "source": "https://raw.githubusercontent.com/facebook/zstd/v1.5.6/LICENSE",
+    "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+  },
+  {
+    "package": "zlib-1.3.1",
+    "file": "LICENSE",
+    "source": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+    "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243"
+  },
+  {
+    "package": "appimagekit-13",
+    "file": "LICENSE",
+    "source": "https://raw.githubusercontent.com/AppImage/AppImageKit/13/LICENSE",
+    "sha256": "9cb22a08334c3a108ec4da96c1d6aea7a17a732fa9f5ca3413a9b4ce651397d8"
+  },
+  {
+    "package": "linuxdeploy-07333c6",
+    "file": "LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy/07333c6e942c7d71782b66be924c5d867f9dfdfc/LICENSE.txt",
+    "sha256": "1edb41ae7601854ae15d113c3700beebd0ea3ed05b85e3786a94a72bb9916091"
+  },
+  {
+    "package": "linuxdeploy-plugin-gtk-7a3fbc3",
+    "file": "LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/7a3fbc31a9e5075073ff8790f26effbac5f84453/LICENSE.txt",
+    "sha256": "0718f6cadf38d2662f397591b777884c5389e65b9919aae6aca2bea87a52eac4"
   }
 ]

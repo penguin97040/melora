@@ -30,6 +30,7 @@ class PackagingTests(unittest.TestCase):
         for name in packaging.FONT_LICENCES:
             (fonts / name).write_text('Synthetic font notice\n')
         Path('THIRD_PARTY_NOTICES.md').write_text('Synthetic runtime notices\n')
+        Path('LICENSE').write_text('Synthetic Melora licence\n')
         executable = bytearray(128)
         executable[:2] = b'MZ'
         executable[60:64] = (64).to_bytes(4, 'little')
@@ -44,7 +45,8 @@ class PackagingTests(unittest.TestCase):
             self.assertIsNone(archive.testzip())
             self.assertEqual(archive.read('Melora.exe'), self.exe.read_bytes())
             self.assertEqual(archive.read('data/'), b'')
-            self.assertEqual(len(archive.namelist()), 9)
+            self.assertEqual(len(archive.namelist()), 10)
+            self.assertEqual(archive.read('licences/LICENSE'), Path('LICENSE').read_bytes())
         digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
         self.assertTrue(archive_path.with_suffix('.zip.sha256').read_text().startswith(digest))
 
